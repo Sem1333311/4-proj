@@ -1,0 +1,6 @@
+﻿services:
+  - type: web
+    name: lan-messenger
+    env: docker
+    plan: free
+    healthCheckPath: /
