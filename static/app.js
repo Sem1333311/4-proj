@@ -1,4 +1,4 @@
-﻿const state = {
+const state = {
   token: localStorage.getItem("token") || "",
   me: null,
   settings: null,
@@ -509,7 +509,7 @@ function ensureCallTile(userId, isLocal = false) {
   video.playsInline = true;
   video.setAttribute("playsinline", "");
   video.setAttribute("webkit-playsinline", "");
-  if (isLocal) video.muted = true;
+  video.muted = isLocal; // Локальное видео всегда muted
 
   const who = document.createElement("div");
   who.className = "who";
@@ -526,7 +526,7 @@ function ensureCallTile(userId, isLocal = false) {
   vol.max = "1";
   vol.step = "0.05";
   vol.value = "1";
-  if (isLocal) vol.disabled = true;
+  vol.disabled = isLocal;
 
   vol.oninput = () => {
     video.volume = Number(vol.value);
@@ -695,16 +695,19 @@ async function switchCamDevice(deviceId) {
     if (sender) await sender.replaceTrack(track);
     else pc.addTrack(track, state.call.localStream);
   }
-  const localCard = ensureCallTile(state.me.id, true);
-  localCard.video.srcObject = new MediaStream(state.call.localStream.getTracks());
-  safePlay(localCard.video);
+  
+  // ИСПРАВЛЕНИЕ: Обновляем локальное видео
+  const localCard = state.call.tiles.get(state.me.id);
+  if (localCard) {
+    localCard.video.srcObject = new MediaStream(state.call.localStream.getTracks());
+    await safePlay(localCard.video);
+  }
 }
 
 async function applyAudioMode(mode) {
   state.devicePrefs.audioMode = mode || "speaker";
   if (!state.call.active) return;
   if (isLikelyIOS && isLikelySafari && !("setSinkId" in HTMLMediaElement.prototype)) {
-    // Safari iOS routes output mostly by system rules; keep preference for future sessions.
     await applySpeakerToAllTiles();
     return;
   }
@@ -731,7 +734,12 @@ async function ensurePeer(userId, createOffer) {
     iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
   });
 
-  state.call.localStream.getTracks().forEach((track) => pc.addTrack(track, state.call.localStream));
+  // ИСПРАВЛЕНИЕ: Добавляем все треки из localStream
+  if (state.call.localStream) {
+    state.call.localStream.getTracks().forEach((track) => {
+      pc.addTrack(track, state.call.localStream);
+    });
+  }
 
   pc.onicecandidate = (ev) => {
     if (!ev.candidate) return;
@@ -814,12 +822,13 @@ async function startCall() {
   state.call.tiles.clear();
   qs("callGrid").innerHTML = "";
 
+  // ИСПРАВЛЕНИЕ: Создаем локальный стрим правильно
   state.call.localStream = new MediaStream();
   await createLocalAudioIfMissing();
 
   const localCard = ensureCallTile(state.me.id, true);
   localCard.video.srcObject = new MediaStream(state.call.localStream.getTracks());
-  safePlay(localCard.video);
+  await safePlay(localCard.video);
   setTileState(state.me.id, { mic: state.call.mic, cam: state.call.cam, screen: state.call.screen });
   await applyAudioMode(state.devicePrefs.audioMode || "speaker");
 
@@ -893,6 +902,7 @@ async function toggleCam() {
   if (!state.call.active) return;
 
   if (state.call.cam) {
+    // Выключаем камеру
     state.call.cam = false;
     state.call.screen = false;
     state.call.localStream.getVideoTracks().forEach((t) => {
@@ -904,6 +914,7 @@ async function toggleCam() {
       if (sender) await sender.replaceTrack(null);
     }
   } else {
+    // Включаем камеру
     const camStream = await navigator.mediaDevices.getUserMedia({
       video: state.devicePrefs.camId ? { deviceId: { exact: state.devicePrefs.camId } } : true,
     });
@@ -916,16 +927,24 @@ async function toggleCam() {
     state.call.cam = true;
     state.call.screen = false;
 
+    // ИСПРАВЛЕНИЕ: Добавляем трек ко всем существующим соединениям
     for (const pc of state.call.peers.values()) {
       const sender = localVideoSender(pc);
-      if (sender) await sender.replaceTrack(track);
-      else pc.addTrack(track, state.call.localStream);
+      if (sender) {
+        await sender.replaceTrack(track);
+      } else {
+        pc.addTrack(track, state.call.localStream);
+      }
     }
   }
 
-  const localCard = ensureCallTile(state.me.id, true);
-  localCard.video.srcObject = new MediaStream(state.call.localStream.getTracks());
-  safePlay(localCard.video);
+  // ИСПРАВЛЕНИЕ: Обновляем локальный тайл
+  const localCard = state.call.tiles.get(state.me.id);
+  if (localCard) {
+    localCard.video.srcObject = new MediaStream(state.call.localStream.getTracks());
+    await safePlay(localCard.video);
+  }
+  
   setTileState(state.me.id, { mic: state.call.mic, cam: state.call.cam, screen: state.call.screen });
   updateCallButtons();
   sendCallState();
@@ -954,9 +973,11 @@ async function toggleScreenShare() {
         const sender = localVideoSender(pc);
         if (sender) await sender.replaceTrack(null);
       }
-      const localCard = ensureCallTile(state.me.id, true);
-      localCard.video.srcObject = new MediaStream(state.call.localStream.getTracks());
-      safePlay(localCard.video);
+      const localCard = state.call.tiles.get(state.me.id);
+      if (localCard) {
+        localCard.video.srcObject = new MediaStream(state.call.localStream.getTracks());
+        await safePlay(localCard.video);
+      }
       setTileState(state.me.id, { mic: state.call.mic, cam: state.call.cam, screen: state.call.screen });
       updateCallButtons();
       sendCallState();
@@ -977,9 +998,13 @@ async function toggleScreenShare() {
     else pc.addTrack(track, state.call.localStream);
   }
 
-  const localCard = ensureCallTile(state.me.id, true);
-  localCard.video.srcObject = new MediaStream(state.call.localStream.getTracks());
-  safePlay(localCard.video);
+  // ИСПРАВЛЕНИЕ: Обновляем локальный тайл
+  const localCard = state.call.tiles.get(state.me.id);
+  if (localCard) {
+    localCard.video.srcObject = new MediaStream(state.call.localStream.getTracks());
+    await safePlay(localCard.video);
+  }
+  
   setTileState(state.me.id, { mic: state.call.mic, cam: state.call.cam, screen: state.call.screen });
   updateCallButtons();
   sendCallState();
