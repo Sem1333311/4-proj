@@ -1,4 +1,7 @@
 ﻿import os
+import mimetypes
+import base64
+import hashlib
 import secrets
 import sqlite3
 import threading
@@ -18,9 +21,10 @@ from fastapi import (
     WebSocket,
     WebSocketDisconnect,
 )
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from cryptography.fernet import Fernet, InvalidToken
 from passlib.context import CryptContext
 from pydantic import BaseModel
 
@@ -33,7 +37,6 @@ ACCESS_CODE = "7xTM[xN[K0FEG&wMKU6TYBbyZMu}H7?v*PLsHAyV"
 
 app = FastAPI(title="LAN Messenger")
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
-app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
 pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
@@ -42,6 +45,33 @@ db_lock = threading.Lock()
 active_connections: dict[int, set[WebSocket]] = {}
 call_rooms: dict[int, dict[int, WebSocket]] = {}
 call_states: dict[int, dict[int, dict]] = {}
+
+
+def _build_file_fernet() -> Fernet:
+    raw = os.getenv("FILE_ENCRYPTION_KEY", "").strip()
+    if raw:
+        try:
+            return Fernet(raw.encode("utf-8"))
+        except Exception:
+            pass
+    digest = hashlib.sha256(ACCESS_CODE.encode("utf-8")).digest()
+    return Fernet(base64.urlsafe_b64encode(digest))
+
+
+FILE_FERNET = _build_file_fernet()
+
+
+def write_encrypted_file(path: Path, payload: bytes):
+    path.write_bytes(FILE_FERNET.encrypt(payload))
+
+
+def read_encrypted_file(path: Path) -> bytes:
+    blob = path.read_bytes()
+    try:
+        return FILE_FERNET.decrypt(blob)
+    except InvalidToken:
+        # Backward compatibility for old plain uploads.
+        return blob
 
 
 class GateIn(BaseModel):
@@ -65,6 +95,10 @@ class ProfileIn(BaseModel):
 
 
 class FriendRequestIn(BaseModel):
+    username: str
+
+
+class UsernameIn(BaseModel):
     username: str
 
 
@@ -244,6 +278,19 @@ def init_db():
                 created_at TEXT NOT NULL,
                 FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
             );
+
+            CREATE TABLE IF NOT EXISTS group_invites (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id INTEGER NOT NULL,
+                inviter_id INTEGER NOT NULL,
+                invitee_id INTEGER NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                created_at TEXT NOT NULL,
+                UNIQUE(chat_id, invitee_id, status),
+                FOREIGN KEY(chat_id) REFERENCES chats(id) ON DELETE CASCADE,
+                FOREIGN KEY(inviter_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY(invitee_id) REFERENCES users(id) ON DELETE CASCADE
+            );
             """
         )
     conn.close()
@@ -378,7 +425,7 @@ def serialize_message(row: sqlite3.Row) -> dict:
         "avatar": row["avatar"],
         "kind": row["kind"],
         "text": row["text"] or "",
-        "file_url": f"/uploads/{row['file_path']}" if row["file_path"] else None,
+        "file_url": f"/media/{row['file_path']}" if row["file_path"] else None,
         "file_name": row["file_name"],
         "mime_type": row["mime_type"],
         "created_at": row["created_at"],
@@ -413,6 +460,27 @@ def startup():
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
+
+
+@app.get("/media/{file_name}")
+async def media_file(file_name: str, request: Request, token: str = ""):
+    user = None
+    if token:
+        user = get_user_by_token(token)
+    if not user:
+        auth = request.headers.get("Authorization", "")
+        if auth.startswith("Bearer "):
+            bearer = auth.replace("Bearer ", "", 1).strip()
+            user = get_user_by_token(bearer)
+    if not user:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    safe = Path(file_name).name
+    target = UPLOAD_DIR / safe
+    if not target.exists():
+        raise HTTPException(status_code=404, detail="Файл не найден")
+    payload = read_encrypted_file(target)
+    ctype = mimetypes.guess_type(safe)[0] or "application/octet-stream"
+    return Response(content=payload, media_type=ctype)
 
 
 @app.get("/api/gate/status")
@@ -677,7 +745,7 @@ async def upload_avatar(file: UploadFile = File(...), user=Depends(get_current_u
     content = await file.read()
     if len(content) > 7 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="Файл до 7MB")
-    target.write_bytes(content)
+    write_encrypted_file(target, content)
 
     conn = get_db()
     with db_lock, conn:
@@ -732,7 +800,7 @@ async def list_assets(kind: str = "", user=Depends(get_current_user)):
             "id": r["id"],
             "kind": r["kind"],
             "title": r["title"] or "",
-            "file_url": f"/uploads/{r['file_path']}",
+            "file_url": f"/media/{r['file_path']}",
             "file_name": r["file_name"],
             "mime_type": r["mime_type"],
             "created_at": r["created_at"],
@@ -757,7 +825,7 @@ async def upload_asset(
 
     ext = Path(file.filename or "asset.bin").suffix
     safe_name = f"asset_{user['id']}_{uuid.uuid4().hex}{ext}"
-    (UPLOAD_DIR / safe_name).write_bytes(payload)
+    write_encrypted_file(UPLOAD_DIR / safe_name, payload)
 
     conn = get_db()
     with db_lock, conn:
@@ -778,7 +846,7 @@ async def upload_asset(
         "id": row["id"],
         "kind": row["kind"],
         "title": row["title"] or "",
-        "file_url": f"/uploads/{row['file_path']}",
+        "file_url": f"/media/{row['file_path']}",
         "file_name": row["file_name"],
         "mime_type": row["mime_type"],
         "created_at": row["created_at"],
@@ -1083,6 +1151,140 @@ async def invite_group_member(chat_id: int, data: DirectIn, user=Depends(get_cur
     return {"ok": True}
 
 
+@app.post("/api/groups/{chat_id}/invite/username")
+async def invite_group_member_by_username(chat_id: int, data: UsernameIn, user=Depends(get_current_user)):
+    username = data.username.strip().lower().lstrip("@")
+    if not username:
+        raise HTTPException(status_code=400, detail="Укажите username")
+    conn = get_db()
+    target = conn.execute("SELECT id, username, nickname FROM users WHERE username = ?", (username,)).fetchone()
+    if not target:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Пользователь не найден")
+
+    chat = get_chat(conn, chat_id)
+    if not chat or chat["type"] != "group":
+        conn.close()
+        raise HTTPException(status_code=404, detail="Группа не найдена")
+    role = conn.execute(
+        "SELECT role FROM chat_members WHERE chat_id = ? AND user_id = ?",
+        (chat_id, user["id"]),
+    ).fetchone()
+    if not role:
+        conn.close()
+        raise HTTPException(status_code=403, detail="Нет доступа")
+    if role["role"] not in {"owner", "admin"}:
+        conn.close()
+        raise HTTPException(status_code=403, detail="Приглашать могут owner/admin")
+    if target["id"] == user["id"]:
+        conn.close()
+        raise HTTPException(status_code=400, detail="Нельзя приглашать себя")
+    already = conn.execute(
+        "SELECT 1 FROM chat_members WHERE chat_id = ? AND user_id = ?",
+        (chat_id, target["id"]),
+    ).fetchone()
+    if already:
+        conn.close()
+        return {"ok": True, "message": "Уже в группе"}
+    if not is_friend(conn, user["id"], target["id"]):
+        conn.close()
+        raise HTTPException(status_code=400, detail="Можно пригласить только друга")
+    allowed, reason = can_invite_to_group(conn, user["id"], target["id"])
+    if not allowed:
+        conn.close()
+        raise HTTPException(status_code=403, detail=reason)
+
+    with db_lock, conn:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO group_invites(chat_id, inviter_id, invitee_id, status, created_at)
+            VALUES (?, ?, ?, 'pending', ?)
+            """,
+            (chat_id, user["id"], target["id"], now_iso()),
+        )
+        invite = conn.execute(
+            """
+            SELECT gi.id, gi.chat_id, gi.inviter_id, gi.invitee_id, gi.status, gi.created_at, c.title as chat_title,
+                   u.username as inviter_username, u.nickname as inviter_nickname
+            FROM group_invites gi
+            JOIN chats c ON c.id = gi.chat_id
+            JOIN users u ON u.id = gi.inviter_id
+            WHERE gi.chat_id = ? AND gi.invitee_id = ? AND gi.status = 'pending'
+            ORDER BY gi.id DESC
+            LIMIT 1
+            """,
+            (chat_id, target["id"]),
+        ).fetchone()
+    conn.close()
+
+    if invite:
+        await push_to_user(target["id"], {"type": "group:invite", "payload": dict(invite)})
+    return {"ok": True}
+
+
+@app.get("/api/groups/invites")
+async def group_invites(user=Depends(get_current_user)):
+    conn = get_db()
+    rows = conn.execute(
+        """
+        SELECT gi.id, gi.chat_id, gi.inviter_id, gi.invitee_id, gi.status, gi.created_at, c.title as chat_title,
+               u.username as inviter_username, u.nickname as inviter_nickname
+        FROM group_invites gi
+        JOIN chats c ON c.id = gi.chat_id
+        JOIN users u ON u.id = gi.inviter_id
+        WHERE gi.invitee_id = ? AND gi.status = 'pending'
+        ORDER BY gi.id DESC
+        """,
+        (user["id"],),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+@app.post("/api/groups/invites/{invite_id}/accept")
+async def accept_group_invite(invite_id: int, user=Depends(get_current_user)):
+    conn = get_db()
+    invite = conn.execute(
+        "SELECT * FROM group_invites WHERE id = ? AND invitee_id = ? AND status = 'pending'",
+        (invite_id, user["id"]),
+    ).fetchone()
+    if not invite:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Приглашение не найдено")
+    chat = get_chat(conn, invite["chat_id"])
+    if not chat or chat["type"] != "group":
+        conn.close()
+        raise HTTPException(status_code=404, detail="Группа не найдена")
+
+    with db_lock, conn:
+        conn.execute("UPDATE group_invites SET status = 'accepted' WHERE id = ?", (invite_id,))
+        conn.execute(
+            "INSERT OR IGNORE INTO chat_members(chat_id, user_id, role, joined_at) VALUES (?, ?, 'member', ?)",
+            (invite["chat_id"], user["id"], now_iso()),
+        )
+    conn.close()
+    await push_to_user(invite["inviter_id"], {"type": "group:invite_answer", "payload": {"invite_id": invite_id, "accepted": True}})
+    await push_to_user(user["id"], {"type": "chat:added", "payload": {"chat_id": invite["chat_id"]}})
+    return {"ok": True}
+
+
+@app.post("/api/groups/invites/{invite_id}/reject")
+async def reject_group_invite(invite_id: int, user=Depends(get_current_user)):
+    conn = get_db()
+    with db_lock, conn:
+        invite = conn.execute(
+            "SELECT * FROM group_invites WHERE id = ? AND invitee_id = ? AND status = 'pending'",
+            (invite_id, user["id"]),
+        ).fetchone()
+        if not invite:
+            conn.close()
+            raise HTTPException(status_code=404, detail="Приглашение не найдено")
+        conn.execute("UPDATE group_invites SET status = 'rejected' WHERE id = ?", (invite_id,))
+    conn.close()
+    await push_to_user(invite["inviter_id"], {"type": "group:invite_answer", "payload": {"invite_id": invite_id, "accepted": False}})
+    return {"ok": True}
+
+
 @app.get("/api/chats")
 async def get_chats(user=Depends(get_current_user)):
     conn = get_db()
@@ -1210,7 +1412,7 @@ async def send_message(
         if len(payload) > 50 * 1024 * 1024:
             conn.close()
             raise HTTPException(status_code=400, detail="Файл до 50MB")
-        (UPLOAD_DIR / safe_name).write_bytes(payload)
+        write_encrypted_file(UPLOAD_DIR / safe_name, payload)
         file_path = safe_name
         file_name = file.filename
         mime_type = file.content_type
@@ -1389,6 +1591,7 @@ async def ws_endpoint(ws: WebSocket):
                         continue
 
                 room = call_rooms.setdefault(chat_id, {})
+                was_empty = len(room) == 0
                 room[user_id] = ws
                 state = {
                     "mic": bool(msg.get("mic", True)),
@@ -1398,7 +1601,25 @@ async def ws_endpoint(ws: WebSocket):
                 call_states.setdefault(chat_id, {})[user_id] = state
                 others = [uid for uid in room.keys() if uid != user_id]
                 states = call_states.get(chat_id, {})
+                member_rows = conn.execute("SELECT user_id FROM chat_members WHERE chat_id = ?", (chat_id,)).fetchall()
                 conn.close()
+
+                if was_empty:
+                    for m in member_rows:
+                        uid = m["user_id"]
+                        if uid == user_id:
+                            continue
+                        await push_to_user(
+                            uid,
+                            {
+                                "type": "call:ring",
+                                "payload": {
+                                    "chat_id": chat_id,
+                                    "from_user": user_id,
+                                    "chat_type": chat["type"],
+                                },
+                            },
+                        )
 
                 await ws.send_json(
                     {
@@ -1503,3 +1724,5 @@ if __name__ == "__main__":
     host = os.getenv("HOST", "0.0.0.0")
     port = int(os.getenv("PORT", "8000"))
     uvicorn.run("app:app", host=host, port=port, reload=True)
+
+

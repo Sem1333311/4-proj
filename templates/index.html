@@ -43,7 +43,14 @@
 
   <div id="app" class="hidden">
     <aside class="panel sidebar">
+      <button id="btnMobileMenu" class="ghost mobile-only">☰</button>
       <div id="profileMini" class="profile-mini"></div>
+      <button id="tabChats" class="sidebar-chat-tab active">Чаты</button>
+      <div class="quick-tabs">
+        <button id="tabRequests" class="quick">📥</button>
+        <button id="tabSearch" class="quick">🔎</button>
+        <button id="tabFriends" class="quick">👥</button>
+      </div>
       <button id="btnCopyMyId" class="ghost">Скопировать мой ID</button>
       <div class="actions-grid">
         <button id="btnProfile">Профиль</button>
@@ -52,13 +59,34 @@
         <button id="btnFriends">Обновить</button>
       </div>
       <input id="chatSearch" placeholder="Поиск чатов" />
-      <div id="chatList" class="list"></div>
+      <div id="paneChats" class="tab-pane">
+        <h3>💬 Чаты</h3>
+        <div id="chatList" class="list"></div>
+      </div>
+      <div id="paneRequests" class="tab-pane hidden">
+        <h3>📥 Заявки в друзья</h3>
+        <div id="friendRequests" class="list compact"></div>
+        <h3>📨 Инвайты в группы</h3>
+        <div id="groupInvites" class="list compact"></div>
+      </div>
+      <div id="paneSearch" class="tab-pane hidden">
+        <h3>🔎 Поиск людей</h3>
+        <input id="userSearch" placeholder="Найти @username" />
+        <div id="userResults" class="list compact"></div>
+      </div>
+      <div id="paneFriends" class="tab-pane hidden">
+        <h3>👥 Друзья</h3>
+        <div id="friendsList" class="list compact"></div>
+      </div>
       <button id="btnLogout" class="danger">Выйти</button>
     </aside>
 
     <main class="panel chat-area">
       <header class="chat-header" id="chatHeader">
-        <div id="chatTitle">Выберите чат</div>
+        <div class="row">
+          <button id="btnBackToList" class="ghost hidden">←</button>
+          <div id="chatTitle">Выберите чат</div>
+        </div>
         <div class="chat-controls">
           <button id="btnCallStart" class="hidden">Звонок</button>
           <button id="btnInviteGroup" class="hidden">Пригласить</button>
@@ -66,7 +94,13 @@
         </div>
       </header>
 
-      <section id="messages" class="messages"></section>
+      <div class="chat-stack">
+        <aside id="groupMembersPanel" class="group-members hidden">
+          <h3>Участники</h3>
+          <div id="chatMembers" class="list compact"></div>
+        </aside>
+        <section id="messages" class="messages"></section>
+      </div>
 
       <footer class="composer">
         <textarea id="messageInput" placeholder="Сообщение" rows="1"></textarea>
@@ -80,21 +114,6 @@
         </div>
       </footer>
     </main>
-
-    <aside class="panel side-right">
-      <h3>Поиск</h3>
-      <input id="userSearch" placeholder="Найти @username" />
-      <div id="userResults" class="list compact"></div>
-
-      <h3>Заявки</h3>
-      <div id="friendRequests" class="list compact"></div>
-
-      <h3>Друзья</h3>
-      <div id="friendsList" class="list compact"></div>
-
-      <h3>Участники чата</h3>
-      <div id="chatMembers" class="list compact"></div>
-    </aside>
   </div>
 
   <section id="callOverlay" class="call-overlay hidden">
@@ -102,6 +121,7 @@
       <div class="call-top">
         <div id="callTitle">Звонок</div>
         <div id="callTimer">00:00</div>
+        <button id="btnMinimizeCall" class="ghost">Свернуть</button>
       </div>
       <div id="callGrid" class="call-grid"></div>
       <div class="call-actions">
@@ -119,6 +139,14 @@
       </div>
     </div>
   </section>
+  <button id="btnCallRestore" class="ghost floating-call hidden">Вернуться в звонок</button>
+  <div id="incomingCallToast" class="incoming hidden">
+    <div id="incomingCallText">Входящий звонок</div>
+    <div class="row">
+      <button id="btnIncomingAccept">Принять</button>
+      <button id="btnIncomingDecline" class="danger">Отклонить</button>
+    </div>
+  </div>
 
   <dialog id="profileDialog" class="panel">
     <h3>Профиль</h3>

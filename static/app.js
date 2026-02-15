@@ -1,4 +1,4 @@
-const state = {
+﻿const state = {
   token: localStorage.getItem("token") || "",
   me: null,
   settings: null,
@@ -36,6 +36,12 @@ const state = {
     audioMode: "speaker",
   },
   assets: [],
+  ui: {
+    currentTab: "chats",
+    chatOpen: false,
+    callMinimized: false,
+    incomingCall: null,
+  },
 };
 
 function qs(id) {
@@ -48,6 +54,36 @@ function show(el) {
 
 function hide(el) {
   el.classList.add("hidden");
+}
+
+function setMainTab(tab) {
+  state.ui.currentTab = tab;
+  const pairs = [
+    ["chats", "paneChats", "tabChats"],
+    ["requests", "paneRequests", "tabRequests"],
+    ["search", "paneSearch", "tabSearch"],
+    ["friends", "paneFriends", "tabFriends"],
+  ];
+  for (const [key, paneId, btnId] of pairs) {
+    const pane = qs(paneId);
+    const btn = qs(btnId);
+    if (!pane || !btn) continue;
+    if (key === tab) {
+      show(pane);
+      btn.classList.add("active");
+    } else {
+      hide(pane);
+      btn.classList.remove("active");
+    }
+  }
+}
+
+function setChatOpen(open) {
+  state.ui.chatOpen = !!open;
+  document.body.classList.toggle("chat-open", state.ui.chatOpen);
+  const back = qs("btnBackToList");
+  if (!back) return;
+  if (state.ui.chatOpen) show(back); else hide(back);
 }
 
 function escapeHtml(v) {
@@ -124,13 +160,20 @@ function peerNameById(id) {
   return `${m.nickname} @${m.username}`;
 }
 
+function withMediaToken(url) {
+  if (!url) return url;
+  if (!state.token) return url;
+  return `${url}${url.includes("?") ? "&" : "?"}token=${encodeURIComponent(state.token)}`;
+}
+
 function messageBody(m) {
   const text = escapeHtml(m.text || "");
   if (!m.file_url) return text;
-  if (m.kind === "image" || m.kind === "sticker" || m.kind === "emoji") return `${text}<br><img src="${m.file_url}" />`;
-  if (m.kind === "video" || m.kind === "circle") return `${text}<br><video src="${m.file_url}" controls playsinline></video>`;
-  if (m.kind === "voice") return `${text}<br><audio src="${m.file_url}" controls></audio>`;
-  return `${text}<br><a href="${m.file_url}" target="_blank">${escapeHtml(m.file_name || "Файл")}</a>`;
+  const fileUrl = withMediaToken(m.file_url);
+  if (m.kind === "image" || m.kind === "sticker" || m.kind === "emoji") return `${text}<br><img src="${fileUrl}" />`;
+  if (m.kind === "video" || m.kind === "circle") return `${text}<br><video src="${fileUrl}" controls playsinline></video>`;
+  if (m.kind === "voice") return `${text}<br><audio src="${fileUrl}" controls></audio>`;
+  return `${text}<br><a href="${fileUrl}" target="_blank">${escapeHtml(m.file_name || "Файл")}</a>`;
 }
 
 function appendMessage(m) {
@@ -161,9 +204,9 @@ function appendMessage(m) {
   if (m.user_id === state.me?.id) {
     const delAll = document.createElement("button");
     delAll.className = "danger";
-    delAll.textContent = "Удалить у всех";
+    delAll.textContent = "校写邪谢懈褌褜 褍 胁褋械褏";
     delAll.onclick = async () => {
-      if (!confirm("Удалить сообщение у всех?")) return;
+      if (!confirm("校写邪谢懈褌褜 褋芯芯斜褖械薪懈械 褍 胁褋械褏?")) return;
       try {
         await api(`/api/messages/${m.id}?mode=all`, { method: "DELETE" });
       } catch (e) {
@@ -211,10 +254,13 @@ function setChatHeader(chat) {
   const canCall = !!chat && !!chat.can_call;
   const group = !!chat && chat.type === "group";
   const canDelete = !!chat && chat.type === "group" && !!chat.can_delete;
+  const stack = document.querySelector(".chat-stack");
 
   if (canCall) show(qs("btnCallStart")); else hide(qs("btnCallStart"));
   if (group) show(qs("btnInviteGroup")); else hide(qs("btnInviteGroup"));
   if (canDelete) show(qs("btnDeleteGroup")); else hide(qs("btnDeleteGroup"));
+  if (group) show(qs("groupMembersPanel")); else hide(qs("groupMembersPanel"));
+  if (stack) stack.classList.toggle("has-members", group);
 }
 
 async function loadMembers(chatId) {
@@ -228,6 +274,28 @@ async function loadMembers(chatId) {
     const el = document.createElement("div");
     el.className = "item";
     el.innerHTML = `<b>${escapeHtml(m.nickname)}</b><small>@${escapeHtml(m.username)} (${m.role}) #${m.id}</small>`;
+    const actions = document.createElement("div");
+    actions.className = "actions";
+    const dm = document.createElement("button");
+    dm.textContent = "ЛС";
+    dm.onclick = async () => {
+      if (m.id === state.me.id) return;
+      const out = await api("/api/chats/direct", { method: "POST", body: JSON.stringify({ user_id: m.id }) });
+      await loadChats();
+      await openChat(out.chat_id);
+    };
+    const call = document.createElement("button");
+    call.textContent = "Позвонить";
+    call.onclick = async () => {
+      if (m.id === state.me.id) return;
+      const out = await api("/api/chats/direct", { method: "POST", body: JSON.stringify({ user_id: m.id }) });
+      await loadChats();
+      await openChat(out.chat_id);
+      await startCall();
+    };
+    actions.appendChild(dm);
+    actions.appendChild(call);
+    el.appendChild(actions);
     wrap.appendChild(el);
   });
 }
@@ -237,6 +305,8 @@ async function openChat(chatId) {
   state.currentChat = chat;
   state.currentChatId = chatId;
   setChatHeader(chat);
+  setChatOpen(true);
+  if (window.innerWidth <= 820) document.body.classList.remove("menu-open");
 
   const messages = qs("messages");
   messages.innerHTML = "";
@@ -254,6 +324,7 @@ async function loadChats() {
       state.currentChat = null;
       state.currentChatId = null;
       setChatHeader(null);
+      setChatOpen(false);
       qs("messages").innerHTML = "";
       qs("chatMembers").innerHTML = "";
     } else {
@@ -277,7 +348,7 @@ async function loadFriends() {
     actions.className = "actions";
 
     const dm = document.createElement("button");
-    dm.textContent = "Чат";
+    dm.textContent = "效邪褌";
     dm.onclick = async () => {
       const out = await api("/api/chats/direct", { method: "POST", body: JSON.stringify({ user_id: f.id }) });
       await loadChats();
@@ -333,6 +404,37 @@ async function loadFriendRequests() {
   });
 }
 
+async function loadGroupInvites() {
+  const rows = await api("/api/groups/invites");
+  const list = qs("groupInvites");
+  if (!list) return;
+  list.innerHTML = "";
+  rows.forEach((r) => {
+    const el = document.createElement("div");
+    el.className = "item";
+    el.innerHTML = `<b>${escapeHtml(r.chat_title || "Группа")}</b><small>от ${escapeHtml(r.inviter_nickname)} @${escapeHtml(r.inviter_username)}</small>`;
+    const actions = document.createElement("div");
+    actions.className = "actions";
+    const yes = document.createElement("button");
+    yes.textContent = "Принять";
+    yes.onclick = async () => {
+      await api(`/api/groups/invites/${r.id}/accept`, { method: "POST", body: "{}" });
+      await Promise.all([loadGroupInvites(), loadChats()]);
+    };
+    const no = document.createElement("button");
+    no.className = "danger";
+    no.textContent = "Отклонить";
+    no.onclick = async () => {
+      await api(`/api/groups/invites/${r.id}/reject`, { method: "POST", body: "{}" });
+      await loadGroupInvites();
+    };
+    actions.appendChild(yes);
+    actions.appendChild(no);
+    el.appendChild(actions);
+    list.appendChild(el);
+  });
+}
+
 async function loadBlockedList() {
   const rows = await api("/api/blocks");
   const list = qs("blockedList");
@@ -358,7 +460,7 @@ async function loadBlockedList() {
 }
 
 async function refreshSide() {
-  await Promise.all([loadFriends(), loadFriendRequests(), loadChats()]);
+  await Promise.all([loadFriends(), loadFriendRequests(), loadGroupInvites(), loadChats()]);
 }
 
 async function sendMessage({ text = "", file = null, kind = "text" }) {
@@ -393,7 +495,7 @@ async function loadAssets() {
   state.assets.forEach((a) => {
     const el = document.createElement("div");
     el.className = "item";
-    el.innerHTML = `<b>${escapeHtml(a.title || a.kind)}</b><small>${a.kind}</small><br><img src="${a.file_url}" style="max-width:72px;max-height:72px;border-radius:8px;" />`;
+    el.innerHTML = `<b>${escapeHtml(a.title || a.kind)}</b><small>${a.kind}</small><br><img src="${withMediaToken(a.file_url)}" style="max-width:72px;max-height:72px;border-radius:8px;" />`;
     const actions = document.createElement("div");
     actions.className = "actions";
     const send = document.createElement("button");
@@ -404,7 +506,7 @@ async function loadAssets() {
     };
     const del = document.createElement("button");
     del.className = "danger";
-    del.textContent = "Удалить";
+    del.textContent = "校写邪谢懈褌褜";
     del.onclick = async () => {
       await api(`/api/assets/${a.id}`, { method: "DELETE" });
       await loadAssets();
@@ -437,7 +539,7 @@ async function startVoiceRecord() {
     await sendMessage({ file, kind: "voice" });
     stream.getTracks().forEach((t) => t.stop());
     state.mediaRecorder = null;
-    qs("btnVoice").textContent = "Голос";
+    qs("btnVoice").textContent = "袚芯谢芯褋";
   };
   rec.start();
 }
@@ -509,7 +611,7 @@ function ensureCallTile(userId, isLocal = false) {
   video.playsInline = true;
   video.setAttribute("playsinline", "");
   video.setAttribute("webkit-playsinline", "");
-  video.muted = isLocal; // Локальное видео всегда muted
+  video.muted = isLocal;
 
   const who = document.createElement("div");
   who.className = "who";
@@ -527,13 +629,25 @@ function ensureCallTile(userId, isLocal = false) {
   vol.step = "0.05";
   vol.value = "1";
   vol.disabled = isLocal;
+  if (!isLocal) vol.classList.add("hidden");
 
   vol.oninput = () => {
     video.volume = Number(vol.value);
   };
 
+  const volBtn = document.createElement("button");
+  volBtn.className = "ghost";
+  volBtn.textContent = "🔊";
+  volBtn.style.width = "auto";
+  volBtn.style.marginTop = "6px";
+  volBtn.onclick = () => {
+    if (isLocal) return;
+    vol.classList.toggle("hidden");
+  };
+
   tile.appendChild(video);
   tile.appendChild(who);
+  tile.appendChild(volBtn);
   tile.appendChild(vol);
   wrap.appendChild(tile);
 
@@ -583,11 +697,33 @@ async function createLocalAudioIfMissing() {
 }
 
 function localVideoSender(pc) {
-  return pc.getSenders().find((s) => s.track && s.track.kind === "video");
+  const direct = pc.getSenders().find((s) => s.track && s.track.kind === "video");
+  if (direct) return direct;
+  for (const t of pc.getTransceivers()) {
+    if (t.receiver && t.receiver.track && t.receiver.track.kind === "video") return t.sender;
+  }
+  return null;
 }
 
 function localAudioSender(pc) {
-  return pc.getSenders().find((s) => s.track && s.track.kind === "audio");
+  const direct = pc.getSenders().find((s) => s.track && s.track.kind === "audio");
+  if (direct) return direct;
+  for (const t of pc.getTransceivers()) {
+    if (t.receiver && t.receiver.track && t.receiver.track.kind === "audio") return t.sender;
+  }
+  return null;
+}
+
+function ensureVideoSender(pc) {
+  let sender = localVideoSender(pc);
+  if (sender) return sender;
+  return pc.addTransceiver("video", { direction: "sendrecv" }).sender;
+}
+
+function ensureAudioSender(pc) {
+  let sender = localAudioSender(pc);
+  if (sender) return sender;
+  return pc.addTransceiver("audio", { direction: "sendrecv" }).sender;
 }
 
 async function listMediaDevices() {
@@ -667,9 +803,8 @@ async function switchMicDevice(deviceId) {
   state.call.localStream.addTrack(track);
 
   for (const pc of state.call.peers.values()) {
-    const sender = localAudioSender(pc);
-    if (sender) await sender.replaceTrack(track);
-    else pc.addTrack(track, state.call.localStream);
+    const sender = ensureAudioSender(pc);
+    await sender.replaceTrack(track);
   }
 }
 
@@ -691,12 +826,10 @@ async function switchCamDevice(deviceId) {
   state.call.localStream.addTrack(track);
 
   for (const pc of state.call.peers.values()) {
-    const sender = localVideoSender(pc);
-    if (sender) await sender.replaceTrack(track);
-    else pc.addTrack(track, state.call.localStream);
+    const sender = ensureVideoSender(pc);
+    await sender.replaceTrack(track);
   }
-  
-  // ИСПРАВЛЕНИЕ: Обновляем локальное видео
+
   const localCard = state.call.tiles.get(state.me.id);
   if (localCard) {
     localCard.video.srcObject = new MediaStream(state.call.localStream.getTracks());
@@ -734,12 +867,12 @@ async function ensurePeer(userId, createOffer) {
     iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
   });
 
-  // ИСПРАВЛЕНИЕ: Добавляем все треки из localStream
-  if (state.call.localStream) {
-    state.call.localStream.getTracks().forEach((track) => {
-      pc.addTrack(track, state.call.localStream);
-    });
-  }
+  const audioTransceiver = pc.addTransceiver("audio", { direction: "sendrecv" });
+  const videoTransceiver = pc.addTransceiver("video", { direction: "sendrecv" });
+  const audioTrack = state.call.localStream?.getAudioTracks()[0] || null;
+  const videoTrack = state.call.localStream?.getVideoTracks()[0] || null;
+  await audioTransceiver.sender.replaceTrack(audioTrack);
+  await videoTransceiver.sender.replaceTrack(videoTrack);
 
   pc.onicecandidate = (ev) => {
     if (!ev.candidate) return;
@@ -775,7 +908,6 @@ async function ensurePeer(userId, createOffer) {
 
   return pc;
 }
-
 async function handleSignal(fromUser, signal) {
   if (!state.call.active) return;
   const pc = await ensurePeer(fromUser, false);
@@ -822,7 +954,6 @@ async function startCall() {
   state.call.tiles.clear();
   qs("callGrid").innerHTML = "";
 
-  // ИСПРАВЛЕНИЕ: Создаем локальный стрим правильно
   state.call.localStream = new MediaStream();
   await createLocalAudioIfMissing();
 
@@ -834,6 +965,7 @@ async function startCall() {
 
   qs("callTitle").textContent = `Звонок: ${state.currentChat.title}`;
   show(qs("callOverlay"));
+  hide(qs("btnCallRestore"));
   updateCallButtons();
   updateCallTimer();
   state.call.timer = setInterval(updateCallTimer, 1000);
@@ -875,8 +1007,10 @@ function resetCallState() {
   state.call.mic = true;
   stopCallTimer();
   hide(qs("callOverlay"));
+  hide(qs("btnCallRestore"));
   qs("callGrid").innerHTML = "";
   updateCallButtons();
+  state.ui.callMinimized = false;
 }
 
 function leaveCall() {
@@ -902,7 +1036,6 @@ async function toggleCam() {
   if (!state.call.active) return;
 
   if (state.call.cam) {
-    // Выключаем камеру
     state.call.cam = false;
     state.call.screen = false;
     state.call.localStream.getVideoTracks().forEach((t) => {
@@ -910,15 +1043,16 @@ async function toggleCam() {
       state.call.localStream.removeTrack(t);
     });
     for (const pc of state.call.peers.values()) {
-      const sender = localVideoSender(pc);
-      if (sender) await sender.replaceTrack(null);
+      const sender = ensureVideoSender(pc);
+      await sender.replaceTrack(null);
     }
   } else {
-    // Включаем камеру
     const camStream = await navigator.mediaDevices.getUserMedia({
       video: state.devicePrefs.camId ? { deviceId: { exact: state.devicePrefs.camId } } : true,
     });
     const track = camStream.getVideoTracks()[0];
+    if (!track) return;
+
     state.call.localStream.getVideoTracks().forEach((t) => {
       t.stop();
       state.call.localStream.removeTrack(t);
@@ -927,60 +1061,54 @@ async function toggleCam() {
     state.call.cam = true;
     state.call.screen = false;
 
-    // ИСПРАВЛЕНИЕ: Добавляем трек ко всем существующим соединениям
     for (const pc of state.call.peers.values()) {
-      const sender = localVideoSender(pc);
-      if (sender) {
-        await sender.replaceTrack(track);
-      } else {
-        pc.addTrack(track, state.call.localStream);
-      }
+      const sender = ensureVideoSender(pc);
+      await sender.replaceTrack(track);
     }
   }
 
-  // ИСПРАВЛЕНИЕ: Обновляем локальный тайл
   const localCard = state.call.tiles.get(state.me.id);
   if (localCard) {
     localCard.video.srcObject = new MediaStream(state.call.localStream.getTracks());
     await safePlay(localCard.video);
   }
-  
+
   setTileState(state.me.id, { mic: state.call.mic, cam: state.call.cam, screen: state.call.screen });
   updateCallButtons();
   sendCallState();
 }
-
 async function toggleScreenShare() {
   if (!state.call.active) return;
 
   if (state.call.screen) {
-    await toggleCam();
+    state.call.screen = false;
+    state.call.cam = false;
+    state.call.localStream.getVideoTracks().forEach((t) => {
+      t.stop();
+      state.call.localStream.removeTrack(t);
+    });
+    for (const pc of state.call.peers.values()) {
+      const sender = ensureVideoSender(pc);
+      await sender.replaceTrack(null);
+    }
+    const localCard = state.call.tiles.get(state.me.id);
+    if (localCard) {
+      localCard.video.srcObject = new MediaStream(state.call.localStream.getTracks());
+      await safePlay(localCard.video);
+    }
+    setTileState(state.me.id, { mic: state.call.mic, cam: state.call.cam, screen: state.call.screen });
+    updateCallButtons();
+    sendCallState();
     return;
   }
 
   const display = await navigator.mediaDevices.getDisplayMedia({ video: true });
   const track = display.getVideoTracks()[0];
+  if (!track) return;
 
   track.onended = async () => {
     if (state.call.screen) {
-      state.call.screen = false;
-      state.call.cam = false;
-      state.call.localStream.getVideoTracks().forEach((t) => {
-        t.stop();
-        state.call.localStream.removeTrack(t);
-      });
-      for (const pc of state.call.peers.values()) {
-        const sender = localVideoSender(pc);
-        if (sender) await sender.replaceTrack(null);
-      }
-      const localCard = state.call.tiles.get(state.me.id);
-      if (localCard) {
-        localCard.video.srcObject = new MediaStream(state.call.localStream.getTracks());
-        await safePlay(localCard.video);
-      }
-      setTileState(state.me.id, { mic: state.call.mic, cam: state.call.cam, screen: state.call.screen });
-      updateCallButtons();
-      sendCallState();
+      await toggleScreenShare();
     }
   };
 
@@ -993,23 +1121,20 @@ async function toggleScreenShare() {
   state.call.screen = true;
 
   for (const pc of state.call.peers.values()) {
-    const sender = localVideoSender(pc);
-    if (sender) await sender.replaceTrack(track);
-    else pc.addTrack(track, state.call.localStream);
+    const sender = ensureVideoSender(pc);
+    await sender.replaceTrack(track);
   }
 
-  // ИСПРАВЛЕНИЕ: Обновляем локальный тайл
   const localCard = state.call.tiles.get(state.me.id);
   if (localCard) {
     localCard.video.srcObject = new MediaStream(state.call.localStream.getTracks());
     await safePlay(localCard.video);
   }
-  
+
   setTileState(state.me.id, { mic: state.call.mic, cam: state.call.cam, screen: state.call.screen });
   updateCallButtons();
   sendCallState();
 }
-
 function stopWsHeartbeat() {
   if (state.wsMeta.pingTimer) {
     clearInterval(state.wsMeta.pingTimer);
@@ -1075,6 +1200,7 @@ function startFallbackSync() {
   state.syncTimer = setInterval(async () => {
     try {
       await Promise.all([loadChats(), loadFriends(), loadFriendRequests()]);
+      await loadGroupInvites();
       await syncCurrentChatIfOpen();
     } catch (_) {}
   }, 12000);
@@ -1143,6 +1269,10 @@ function connectWs() {
       refreshSide();
     }
 
+    if (msg.type === "group:invite" || msg.type === "group:invite_answer") {
+      loadGroupInvites();
+    }
+
     if (msg.type === "group:deleted") {
       if (state.currentChatId === msg.payload.chat_id) {
         state.currentChatId = null;
@@ -1150,6 +1280,7 @@ function connectWs() {
         qs("messages").innerHTML = "";
         qs("chatMembers").innerHTML = "";
         setChatHeader(null);
+        setChatOpen(false);
       }
       refreshSide();
     }
@@ -1165,6 +1296,13 @@ function connectWs() {
       for (const uid of list) {
         if (state.me.id > uid) await ensurePeer(uid, true);
       }
+    }
+
+    if (msg.type === "call:ring") {
+      const chat = state.chats.find((c) => c.id === msg.payload.chat_id);
+      state.ui.incomingCall = { chatId: msg.payload.chat_id, title: chat?.title || "Входящий звонок" };
+      qs("incomingCallText").textContent = `Входящий звонок: ${state.ui.incomingCall.title}`;
+      show(qs("incomingCallToast"));
     }
 
     if (msg.type === "call:user_joined") {
@@ -1226,13 +1364,21 @@ async function onAuthorized() {
   show(qs("app"));
 
   renderProfileMini();
-  await Promise.all([loadChats(), loadFriends(), loadFriendRequests(), loadSettings()]);
+  await Promise.all([loadChats(), loadFriends(), loadFriendRequests(), loadGroupInvites(), loadSettings()]);
   connectWs();
   startFallbackSync();
 }
 
 function bindUi() {
+  setMainTab("chats");
+  setChatOpen(false);
   qs("gateCode").value = localStorage.getItem("saved_gate_code") || "";
+  qs("tabChats").onclick = () => setMainTab("chats");
+  qs("tabRequests").onclick = () => setMainTab("requests");
+  qs("tabSearch").onclick = () => setMainTab("search");
+  qs("tabFriends").onclick = () => setMainTab("friends");
+  qs("btnBackToList").onclick = () => setChatOpen(false);
+  qs("btnMobileMenu").onclick = () => document.body.classList.toggle("menu-open");
 
   qs("gateBtn").onclick = async () => {
     setError("gateError", "");
@@ -1390,11 +1536,14 @@ function bindUi() {
 
   qs("btnInviteGroup").onclick = async () => {
     if (!state.currentChat || state.currentChat.type !== "group") return;
-    const raw = prompt("ID пользователя для приглашения в группу");
-    const id = parseInt(raw || "", 10);
-    if (!Number.isInteger(id)) return;
-    await api(`/api/groups/${state.currentChatId}/invite`, { method: "POST", body: JSON.stringify({ user_id: id }) });
-    await loadMembers(state.currentChatId);
+    const raw = prompt("Введите @username для инвайта");
+    const username = String(raw || "").trim();
+    if (!username) return;
+    await api(`/api/groups/${state.currentChatId}/invite/username`, {
+      method: "POST",
+      body: JSON.stringify({ username }),
+    });
+    alert("Инвайт отправлен");
   };
 
   qs("btnDeleteGroup").onclick = async () => {
@@ -1406,6 +1555,7 @@ function bindUi() {
     qs("messages").innerHTML = "";
     qs("chatMembers").innerHTML = "";
     setChatHeader(null);
+    setChatOpen(false);
     await loadChats();
   };
 
@@ -1532,6 +1682,32 @@ function bindUi() {
     await applySpeakerToAllTiles();
   };
   qs("selAudioMode").onchange = async () => applyAudioMode(qs("selAudioMode").value);
+  qs("btnMinimizeCall").onclick = () => {
+    hide(qs("callOverlay"));
+    state.ui.callMinimized = true;
+    show(qs("btnCallRestore"));
+  };
+  qs("btnCallRestore").onclick = () => {
+    if (!state.call.active) return;
+    show(qs("callOverlay"));
+    hide(qs("btnCallRestore"));
+    state.ui.callMinimized = false;
+  };
+  qs("btnIncomingAccept").onclick = async () => {
+    const incoming = state.ui.incomingCall;
+    hide(qs("incomingCallToast"));
+    if (!incoming) return;
+    const chat = state.chats.find((c) => c.id === incoming.chatId);
+    if (chat) {
+      await openChat(chat.id);
+      await startCall();
+    }
+    state.ui.incomingCall = null;
+  };
+  qs("btnIncomingDecline").onclick = () => {
+    hide(qs("incomingCallToast"));
+    state.ui.incomingCall = null;
+  };
 }
 
 async function boot() {
@@ -1556,3 +1732,6 @@ async function boot() {
 }
 
 boot();
+
+
+
