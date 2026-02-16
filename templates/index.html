@@ -1,236 +1,281 @@
 ﻿<!DOCTYPE html>
 <html lang="ru">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-  <meta name="apple-mobile-web-app-capable" content="yes" />
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <title>LAN Messenger</title>
-  <link rel="stylesheet" href="/static/style.css" />
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="theme-color" content="#111316">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <title>LAN Messenger</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <!-- FIXED: Permissions-Policy for WebRTC -->
+    <meta http-equiv="Permissions-Policy" content="camera=(self), microphone=(self), display-capture=(self)">
 </head>
 <body>
-  <div id="gateScreen" class="screen">
-    <div class="panel auth-panel">
-      <h1>LAN Messenger</h1>
-      <p>Код доступа</p>
-      <input id="gateCode" type="password" placeholder="40-символьный код" />
-      <label class="row small"><input id="rememberCode" type="checkbox" checked /> Запомнить код на этом устройстве</label>
-      <button id="gateBtn">Продолжить</button>
-      <div id="gateError" class="error"></div>
-    </div>
-  </div>
-
-  <div id="authScreen" class="screen hidden">
-    <div class="panel auth-panel">
-      <div class="tabs">
-        <button id="tabLogin" class="tab active">Вход</button>
-        <button id="tabRegister" class="tab">Регистрация</button>
-      </div>
-      <div id="loginPane">
-        <input id="loginUsername" placeholder="@username" />
-        <input id="loginPassword" type="password" placeholder="Пароль" />
-        <button id="loginBtn">Войти</button>
-      </div>
-      <div id="registerPane" class="hidden">
-        <input id="regUsername" placeholder="@username" />
-        <input id="regNickname" placeholder="Никнейм" />
-        <input id="regPassword" type="password" placeholder="Пароль" />
-        <button id="registerBtn">Создать аккаунт</button>
-      </div>
-      <div id="authError" class="error"></div>
-    </div>
-  </div>
-
-  <div id="app" class="hidden">
-    <aside class="panel sidebar">
-      <button id="btnMobileMenu" class="ghost mobile-only">☰</button>
-      <div id="profileMini" class="profile-mini"></div>
-      <button id="tabChats" class="sidebar-chat-tab active">Чаты</button>
-      <div class="quick-tabs">
-        <button id="tabRequests" class="quick">📥</button>
-        <button id="tabSearch" class="quick">🔎</button>
-        <button id="tabFriends" class="quick">👥</button>
-      </div>
-      <button id="btnCopyMyId" class="ghost">Скопировать мой ID</button>
-      <div class="actions-grid">
-        <button id="btnProfile">Профиль</button>
-        <button id="btnSettings">Настройки</button>
-        <button id="btnGroup">Новая группа</button>
-        <button id="btnFriends">Обновить</button>
-      </div>
-      <input id="chatSearch" placeholder="Поиск чатов" />
-      <div id="paneChats" class="tab-pane">
-        <h3>💬 Чаты</h3>
-        <div id="chatList" class="list"></div>
-      </div>
-      <div id="paneRequests" class="tab-pane hidden">
-        <h3>📥 Заявки в друзья</h3>
-        <div id="friendRequests" class="list compact"></div>
-        <h3>📨 Инвайты в группы</h3>
-        <div id="groupInvites" class="list compact"></div>
-      </div>
-      <div id="paneSearch" class="tab-pane hidden">
-        <h3>🔎 Поиск людей</h3>
-        <input id="userSearch" placeholder="Найти @username" />
-        <div id="userResults" class="list compact"></div>
-      </div>
-      <div id="paneFriends" class="tab-pane hidden">
-        <h3>👥 Друзья</h3>
-        <div id="friendsList" class="list compact"></div>
-      </div>
-      <button id="btnLogout" class="danger">Выйти</button>
-    </aside>
-
-    <main class="panel chat-area">
-      <header class="chat-header" id="chatHeader">
-        <div class="row">
-          <button id="btnBackToList" class="ghost hidden">←</button>
-          <div id="chatTitle">Выберите чат</div>
+    <!-- Gate Screen -->
+    <div id="gateScreen" class="screen">
+        <div class="panel auth-panel">
+            <h1>LAN Messenger</h1>
+            <p>Код доступа</p>
+            <input type="password" id="gateCode" placeholder="Введите код">
+            <div class="row">
+                <input type="checkbox" id="rememberCode" style="width:auto;">
+                <label for="rememberCode" style="margin:0;">Запомнить код на этом устройстве</label>
+            </div>
+            <button id="gateBtn">Продолжить</button>
+            <div id="gateError" class="error"></div>
         </div>
-        <div class="chat-controls">
-          <button id="btnCallStart" class="hidden">Звонок</button>
-          <button id="btnInviteGroup" class="hidden">Пригласить</button>
-          <button id="btnDeleteGroup" class="danger hidden">Удалить группу</button>
-        </div>
-      </header>
+    </div>
 
-      <div class="chat-stack">
-        <aside id="groupMembersPanel" class="group-members hidden">
-          <h3>Участники</h3>
-          <div id="chatMembers" class="list compact"></div>
+    <!-- Auth Screen -->
+    <div id="authScreen" class="screen hidden">
+        <div class="panel auth-panel">
+            <div class="tabs">
+                <button id="tabLogin" class="tab active">Вход</button>
+                <button id="tabRegister" class="tab">Регистрация</button>
+            </div>
+            
+            <div id="loginPane">
+                <input type="text" id="loginUsername" placeholder="Username">
+                <input type="password" id="loginPassword" placeholder="Пароль">
+                <button id="loginBtn">Войти</button>
+            </div>
+            
+            <div id="registerPane" class="hidden">
+                <input type="text" id="regUsername" placeholder="Username">
+                <input type="password" id="regPassword" placeholder="Пароль">
+                <input type="text" id="regNickname" placeholder="Ник">
+                <button id="registerBtn">Создать аккаунт</button>
+            </div>
+            
+            <div id="authError" class="error"></div>
+        </div>
+    </div>
+
+    <!-- Main App -->
+    <div id="app" class="hidden">
+        <!-- Sidebar -->
+        <aside class="sidebar panel">
+            <div class="profile-mini" id="profileMini"></div>
+            <button id="btnMobileMenu" class="mobile-only">☰</button>
+            <div class="quick-tabs">
+                <button id="tabChats" class="quick active">💬</button>
+                <button id="tabRequests" class="quick">📥</button>
+                <button id="tabSearch" class="quick">🔎</button>
+                <button id="tabFriends" class="quick">👥</button>
+            </div>
+            
+            <div id="paneChats" class="tab-pane">
+                <div class="row">
+                    <button id="btnCopyMyId" class="ghost">Скопировать мой ID</button>
+                    <button id="btnProfile">Профиль</button>
+                    <button id="btnSettings">Настройки</button>
+                </div>
+                <div class="row">
+                    <button id="btnGroup">Новая группа</button>
+                    <button id="btnFriends">Обновить</button>
+                </div>
+                <h3>💬 Чаты</h3>
+                <input type="text" id="chatSearch" placeholder="Поиск чатов...">
+                <div id="chatList" class="list"></div>
+            </div>
+            
+            <div id="paneRequests" class="tab-pane hidden">
+                <h3>📥 Заявки в друзья</h3>
+                <div id="friendRequests" class="list"></div>
+                <h3>📨 Инвайты в группы</h3>
+                <div id="groupInvites" class="list compact"></div>
+            </div>
+            
+            <div id="paneSearch" class="tab-pane hidden">
+                <h3>🔎 Поиск людей</h3>
+                <input type="text" id="userSearch" placeholder="Username или ник...">
+                <div id="userResults" class="list"></div>
+            </div>
+            
+            <div id="paneFriends" class="tab-pane hidden">
+                <h3>👥 Друзья</h3>
+                <div id="friendsList" class="list"></div>
+                <button id="btnLogout" class="danger">Выйти</button>
+            </div>
         </aside>
-        <section id="messages" class="messages"></section>
-      </div>
 
-      <footer class="composer">
-        <textarea id="messageInput" placeholder="Сообщение" rows="1"></textarea>
-        <input id="fileInput" type="file" hidden />
-        <div class="composer-actions">
-          <button id="btnAssets">Эмодзи/стикеры</button>
-          <button id="btnFile">Файл</button>
-          <button id="btnVoice">Голос</button>
-          <button id="btnCircle">Кружок</button>
-          <button id="sendBtn">Отправить</button>
+        <!-- Chat Area -->
+        <main class="chat-area panel">
+            <div class="chat-header">
+                <div class="row">
+                    <button id="btnBackToList" class="mobile-only">←</button>
+                    <h3 id="chatTitle">Выберите чат</h3>
+                </div>
+                <div class="chat-controls">
+                    <button id="btnCallStart">Звонок</button>
+                    <button id="btnInviteGroup">Пригласить</button>
+                    <button id="btnDeleteGroup" class="danger">Удалить группу</button>
+                </div>
+            </div>
+            
+            <div class="chat-stack">
+                <div id="groupMembersPanel" class="group-members hidden">
+                    <h4>Участники</h4>
+                    <div id="chatMembers"></div>
+                </div>
+                
+                <div class="messages" id="messages"></div>
+            </div>
+            
+            <div class="composer">
+                <textarea id="messageInput" placeholder="Сообщение..."></textarea>
+                <div class="composer-actions">
+                    <button id="btnAssets">Эмодзи/стикеры</button>
+                    <button id="btnFile">Файл</button>
+                    <button id="btnVoice">Голос</button>
+                    <button id="btnCircle">Кружок</button>
+                    <button id="sendBtn">Отправить</button>
+                </div>
+                <input type="file" id="fileInput" class="hidden">
+            </div>
+        </main>
+    </div>
+
+    <!-- Call Overlay -->
+    <div id="callOverlay" class="call-overlay hidden">
+        <div class="panel call-shell">
+            <div class="call-top">
+                <h3 id="callTitle">Звонок 00:00</h3>
+                <div class="row">
+                    <span id="callTimer">00:00</span>
+                    <button id="btnMinimizeCall">Свернуть</button>
+                </div>
+            </div>
+            
+            <div id="callGrid" class="call-grid"></div>
+            
+            <div class="call-actions">
+                <button id="btnToggleMic">Микрофон: вкл</button>
+                <button id="btnToggleCam">Камера: выкл</button>
+                <button id="btnShareScreen">Демонстрация</button>
+                <button id="btnDevices">Устройства</button>
+                <button id="btnLeaveCall" class="danger">Выйти</button>
+            </div>
+            
+            <div id="devicePanel" class="device-panel hidden">
+                <div>
+                    <label>Микрофон</label>
+                    <select id="selMic"></select>
+                </div>
+                <div>
+                    <label>Камера</label>
+                    <select id="selCam"></select>
+                </div>
+                <div>
+                    <label>Вывод звука</label>
+                    <select id="selSpeaker"></select>
+                </div>
+                <div>
+                    <label>Режим звука</label>
+                    <select id="selAudioMode">
+                        <option value="speaker">Спикер (по умолчанию)</option>
+                        <option value="phone">Телефон</option>
+                    </select>
+                </div>
+            </div>
         </div>
-      </footer>
-    </main>
-  </div>
-
-  <section id="callOverlay" class="call-overlay hidden">
-    <div class="call-shell panel">
-      <div class="call-top">
-        <div id="callTitle">Звонок</div>
-        <div id="callTimer">00:00</div>
-        <button id="btnMinimizeCall" class="ghost">Свернуть</button>
-      </div>
-      <div id="callGrid" class="call-grid"></div>
-      <div class="call-actions">
-        <button id="btnToggleMic">Микрофон: вкл</button>
-        <button id="btnToggleCam">Камера: выкл</button>
-        <button id="btnShareScreen">Демонстрация</button>
-        <button id="btnDevices">Устройства</button>
-        <button id="btnLeaveCall" class="danger">Выйти</button>
-      </div>
-      <div id="devicePanel" class="device-panel hidden">
-        <label>Микрофон<select id="selMic"></select></label>
-        <label>Камера<select id="selCam"></select></label>
-        <label>Вывод звука<select id="selSpeaker"></select></label>
-        <label>Режим звука<select id="selAudioMode"><option value="speaker">Спикер (по умолчанию)</option><option value="phone">Телефон</option></select></label>
-      </div>
     </div>
-  </section>
-  <button id="btnCallRestore" class="ghost floating-call hidden">Вернуться в звонок</button>
-  <div id="incomingCallToast" class="incoming hidden">
-    <div id="incomingCallText">Входящий звонок</div>
-    <div class="row">
-      <button id="btnIncomingAccept">Принять</button>
-      <button id="btnIncomingDecline" class="danger">Отклонить</button>
+
+    <!-- Incoming Call Toast -->
+    <div id="incomingCallToast" class="incoming hidden">
+        <p id="incomingCallText">Входящий звонок</p>
+        <div class="dialog-actions">
+            <button id="btnIncomingAccept">Принять</button>
+            <button id="btnIncomingDecline" class="danger">Отклонить</button>
+        </div>
     </div>
-  </div>
 
-  <dialog id="profileDialog" class="panel">
-    <h3>Профиль</h3>
-    <input id="profileNickname" placeholder="Ник" />
-    <textarea id="profileAbout" placeholder="О себе"></textarea>
-    <input id="profileAvatar" type="file" accept="image/*" />
-    <div class="dialog-actions">
-      <button id="profileSave">Сохранить</button>
-      <button id="profileClose" class="ghost">Закрыть</button>
-    </div>
-  </dialog>
+    <!-- Minimized Call Button -->
+    <button id="btnCallRestore" class="floating-call hidden">Вернуться в звонок</button>
 
-  <dialog id="groupDialog" class="panel">
-    <h3>Новая группа</h3>
-    <input id="groupTitle" placeholder="Название группы" />
-    <p class="small">ID друзей через запятую. ID видно в списке друзей как `#123`</p>
-    <input id="groupMembers" placeholder="2,3,4" />
-    <div class="dialog-actions">
-      <button id="groupCreate">Создать</button>
-      <button id="groupClose" class="ghost">Закрыть</button>
-    </div>
-  </dialog>
+    <!-- Profile Dialog -->
+    <dialog id="profileDialog">
+        <h3>Профиль</h3>
+        <input type="text" id="profileNickname" placeholder="Ник">
+        <textarea id="profileAbout" placeholder="О себе"></textarea>
+        <input type="file" id="profileAvatar" accept="image/*">
+        <div class="dialog-actions">
+            <button id="profileSave">Сохранить</button>
+            <button id="profileClose">Закрыть</button>
+        </div>
+    </dialog>
 
-  <dialog id="settingsDialog" class="panel">
-    <h3>Приватность и настройки</h3>
-    <label>Заявки в друзья
-      <select id="setFriendReq">
-        <option value="everyone">Все</option>
-        <option value="nobody">Никто</option>
-      </select>
-    </label>
-    <label>Кто может звонить
-      <select id="setCalls">
-        <option value="friends">Только друзья</option>
-        <option value="everyone">Все</option>
-        <option value="nobody">Никто</option>
-      </select>
-    </label>
-    <label>Кто может приглашать в группы
-      <select id="setInvites">
-        <option value="friends">Только друзья</option>
-        <option value="everyone">Все</option>
-        <option value="nobody">Никто</option>
-      </select>
-    </label>
-    <label>Видимость статуса
-      <select id="setLastSeen">
-        <option value="friends">Только друзья</option>
-        <option value="everyone">Все</option>
-        <option value="nobody">Никто</option>
-      </select>
-    </label>
-    <h4>Смена пароля</h4>
-    <input id="oldPassword" type="password" placeholder="Старый пароль" />
-    <input id="newPassword" type="password" placeholder="Новый пароль" />
-    <button id="btnChangePassword">Сменить пароль</button>
+    <!-- Group Dialog -->
+    <dialog id="groupDialog">
+        <h3>Новая группа</h3>
+        <input type="text" id="groupTitle" placeholder="Название">
+        <input type="text" id="groupMembers" placeholder="ID друзей через запятую. ID видно в списке друзей как #123">
+        <div class="dialog-actions">
+            <button id="groupCreate">Создать</button>
+            <button id="groupClose">Закрыть</button>
+        </div>
+    </dialog>
 
-    <h4>Заблокированные</h4>
-    <div id="blockedList" class="list compact"></div>
+    <!-- Settings Dialog -->
+    <dialog id="settingsDialog">
+        <h3>Приватность и настройки</h3>
+        <label>Заявки в друзья</label>
+        <select id="setFriendReq">
+            <option value="everyone">Все</option>
+            <option value="friends">Только друзья</option>
+            <option value="nobody">Никто</option>
+        </select>
+        <label>Кто может звонить</label>
+        <select id="setCalls">
+            <option value="everyone">Все</option>
+            <option value="friends">Только друзья</option>
+            <option value="nobody">Никто</option>
+        </select>
+        <label>Кто может приглашать в группы</label>
+        <select id="setInvites">
+            <option value="everyone">Все</option>
+            <option value="friends">Только друзья</option>
+            <option value="nobody">Никто</option>
+        </select>
+        <label>Видимость статуса</label>
+        <select id="setLastSeen">
+            <option value="everyone">Все</option>
+            <option value="friends">Только друзья</option>
+            <option value="nobody">Никто</option>
+        </select>
+        
+        <h4>Смена пароля</h4>
+        <input type="password" id="oldPassword" placeholder="Старый пароль">
+        <input type="password" id="newPassword" placeholder="Новый пароль">
+        <button id="btnChangePassword">Сменить пароль</button>
+        
+        <h4>Заблокированные</h4>
+        <div id="blockedList" class="list compact"></div>
+        
+        <div class="dialog-actions">
+            <button id="settingsSave">Сохранить</button>
+            <button id="btnDeleteAccount" class="danger">Удалить аккаунт</button>
+            <button id="settingsClose">Закрыть</button>
+        </div>
+    </dialog>
 
-    <div class="dialog-actions">
-      <button id="settingsSave">Сохранить</button>
-      <button id="btnDeleteAccount" class="danger">Удалить аккаунт</button>
-      <button id="settingsClose" class="ghost">Закрыть</button>
-    </div>
-  </dialog>
+    <!-- Assets Dialog -->
+    <dialog id="assetsDialog">
+        <h3>Мои эмодзи и стикеры</h3>
+        <select id="assetKind">
+            <option value="emoji">Emoji</option>
+            <option value="sticker">Sticker</option>
+        </select>
+        <input type="text" id="assetTitle" placeholder="Название">
+        <input type="file" id="assetFile" accept="image/*,video/*">
+        <button id="btnUploadAsset">Загрузить</button>
+        <div id="assetsList" class="list"></div>
+        <div class="dialog-actions">
+            <button id="assetsClose">Закрыть</button>
+        </div>
+    </dialog>
 
-  <dialog id="assetsDialog" class="panel">
-    <h3>Мои эмодзи и стикеры</h3>
-    <label>Тип
-      <select id="assetKind">
-        <option value="emoji">Emoji</option>
-        <option value="sticker">Sticker</option>
-      </select>
-    </label>
-    <input id="assetTitle" placeholder="Название (необязательно)" />
-    <input id="assetFile" type="file" accept="image/*,.webp,.gif,.png,.jpg,.jpeg" />
-    <button id="btnUploadAsset">Загрузить</button>
-    <div id="assetsList" class="list"></div>
-    <div class="dialog-actions">
-      <button id="assetsClose" class="ghost">Закрыть</button>
-    </div>
-  </dialog>
-
-  <script src="/static/app.js"></script>
+    <script src="/static/app.js"></script>
 </body>
 </html>
