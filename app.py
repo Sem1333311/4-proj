@@ -924,6 +924,43 @@ async def delete_group(chat_id: int, user=Depends(get_current_user)):
         await push_to_user(m["user_id"], {"type": "group:deleted", "payload": {"chat_id": chat_id}})
     return {"ok": True}
 
+@app.post("/api/chats/{chat_id}/leave")
+async def leave_chat(chat_id: int, user=Depends(get_current_user)):
+    conn = get_db()
+    chat = get_chat(conn, chat_id)
+    if not chat:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Чат не найден")
+    member = conn.execute(
+        "SELECT role FROM chat_members WHERE chat_id = ? AND user_id = ?",
+        (chat_id, user["id"]),
+    ).fetchone()
+    if not member:
+        conn.close()
+        raise HTTPException(status_code=403, detail="Нет доступа")
+
+    new_owner_id = None
+    with db_lock, conn:
+        conn.execute("DELETE FROM chat_members WHERE chat_id = ? AND user_id = ?", (chat_id, user["id"]))
+        remaining = conn.execute(
+            "SELECT user_id FROM chat_members WHERE chat_id = ? ORDER BY user_id LIMIT 1",
+            (chat_id,),
+        ).fetchone()
+
+        if chat["type"] == "direct":
+            conn.execute("DELETE FROM chats WHERE id = ?", (chat_id,))
+        elif not remaining:
+            conn.execute("DELETE FROM chats WHERE id = ?", (chat_id,))
+        elif chat["created_by"] == user["id"]:
+            new_owner_id = remaining["user_id"]
+            conn.execute("UPDATE chats SET created_by = ? WHERE id = ?", (new_owner_id, chat_id))
+            conn.execute(
+                "UPDATE chat_members SET role = 'owner' WHERE chat_id = ? AND user_id = ?",
+                (chat_id, new_owner_id),
+            )
+    conn.close()
+    return {"ok": True, "new_owner_id": new_owner_id}
+
 @app.post("/api/groups/{chat_id}/invite")
 async def invite_group_member(chat_id: int, data: DirectIn, user=Depends(get_current_user)):
     conn = get_db()

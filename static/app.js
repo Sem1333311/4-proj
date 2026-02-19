@@ -261,10 +261,13 @@ function setChatHeader(chat) {
   const stack = document.querySelector(".chat-stack");
   const btnCall = qs("btnCallStart");
   const btnInvite = qs("btnInviteGroup");
+  const btnLeave = qs("btnLeaveChat");
   const btnDelete = qs("btnDeleteGroup");
   const membersPanel = qs("groupMembersPanel");
   if (canCall) show(btnCall); else hide(btnCall);
   if (group) show(btnInvite); else hide(btnInvite);
+  if (chat) show(btnLeave); else hide(btnLeave);
+  if (btnLeave) btnLeave.textContent = group ? "Выйти из группы" : "Выйти из чата";
   if (canDelete) show(btnDelete); else hide(btnDelete);
   if (group) show(membersPanel); else hide(membersPanel);
   if (stack) stack.classList.toggle("has-members", group);
@@ -1424,6 +1427,20 @@ async function onAuthorized() {
   startFallbackSync();
 }
 
+function resetToAuthUi() {
+  hide(qs("app"));
+  show(qs("authScreen"));
+  hide(qs("gateScreen"));
+  setError("authError", "");
+  setError("gateError", "");
+  state.me = null;
+  state.settings = null;
+  state.chats = [];
+  state.friends = [];
+  state.currentChat = null;
+  state.currentChatId = null;
+}
+
 function bindUi() {
   setMainTab("chats");
   setChatOpen(false);
@@ -1461,6 +1478,7 @@ function bindUi() {
   const groupClose = qs("groupClose");
   const groupCreate = qs("groupCreate");
   const btnInviteGroup = qs("btnInviteGroup");
+  const btnLeaveChat = qs("btnLeaveChat");
   const btnDeleteGroup = qs("btnDeleteGroup");
   const btnFriends = qs("btnFriends");
   const btnCopyMyId = qs("btnCopyMyId");
@@ -1556,31 +1574,31 @@ function bindUi() {
       }
   };
   if (btnLogout) btnLogout.onclick = async () => {
-    try {
-      await api("/api/logout", { method: "POST", body: "{}" });
-  } catch (err) {
-      console.error("Logout error:", err);
-  }
-  
-  leaveCall();
-  
-  if (state.syncTimer) {
-      clearInterval(state.syncTimer);
-  }
-  
-  stopWsHeartbeat();
-  
-  if (state.ws) {
       try {
-          state.ws.close();
+          await api("/api/logout", { method: "POST", body: "{}" });
       } catch (err) {
-          console.error("WebSocket close error:", err);
+          console.error("Logout error:", err);
       }
-  }
-  
+
+      leaveCall();
+
+      if (state.syncTimer) {
+          clearInterval(state.syncTimer);
       }
+
+      stopWsHeartbeat();
+
+      if (state.ws) {
+          try {
+              state.ws.close();
+          } catch (err) {
+              console.error("WebSocket close error:", err);
+          }
+      }
+
       localStorage.removeItem("token");
-      location.reload();
+      state.token = "";
+      resetToAuthUi();
   };
   if (chatSearch) chatSearch.oninput = () => renderChatList(chatSearch.value);
   if (sendBtn) sendBtn.onclick = () => sendMessage({ text: messageInput?.value || "" });
@@ -1671,6 +1689,22 @@ function bindUi() {
           body: JSON.stringify({ username }),
       });
       alert("Инвайт отправлен");
+  };
+  if (btnLeaveChat) btnLeaveChat.onclick = async () => {
+      if (!state.currentChatId) return;
+      const targetName = state.currentChat?.type === "group" ? "эту группу" : "этот чат";
+      if (!confirm(`Выйти из ${targetName}?`)) return;
+      if (state.call.active && state.call.chatId === state.currentChatId) leaveCall();
+      await api(`/api/chats/${state.currentChatId}/leave`, { method: "POST", body: "{}" });
+      state.currentChat = null;
+      state.currentChatId = null;
+      const msgEl = qs("messages");
+      const memEl = qs("chatMembers");
+      if (msgEl) msgEl.innerHTML = "";
+      if (memEl) memEl.innerHTML = "";
+      setChatHeader(null);
+      setChatOpen(false);
+      await loadChats();
   };
   if (btnDeleteGroup) btnDeleteGroup.onclick = async () => {
       if (!state.currentChat || state.currentChat.type !== "group") return;
@@ -1780,7 +1814,8 @@ function bindUi() {
           } catch (_) {}
       }
       localStorage.removeItem("token");
-      location.reload();
+      state.token = "";
+      resetToAuthUi();
   };
   if (btnCallStart) btnCallStart.onclick = startCall;
   if (btnLeaveCall) btnLeaveCall.onclick = leaveCall;
@@ -1830,8 +1865,12 @@ function bindUi() {
       hide(incomingCallToast);
       state.ui.incomingCall = null;
   };
+}
 
 async function boot() {
+  if (window.__lanMessengerBooted) return;
+  window.__lanMessengerBooted = true;
+
   bindUi();
   const gate = await api("/api/gate/status");
   const sessionOk = await ensureSession();

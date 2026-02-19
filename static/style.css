@@ -351,6 +351,11 @@ button:focus-visible {
   min-height: 52px;
 }
 
+#btnBackToList {
+  width: auto;
+  margin: 0;
+}
+
 .chat-controls {
   display: flex;
   gap: 6px;

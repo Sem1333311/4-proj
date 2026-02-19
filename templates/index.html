@@ -104,12 +104,13 @@
         <main class="chat-area panel">
             <div class="chat-header">
                 <div class="row">
-                    <button id="btnBackToList" class="mobile-only">←</button>
+                    <button id="btnBackToList" class="hidden">←</button>
                     <h3 id="chatTitle">Выберите чат</h3>
                 </div>
                 <div class="chat-controls">
                     <button id="btnCallStart">Звонок</button>
                     <button id="btnInviteGroup">Пригласить</button>
+                    <button id="btnLeaveChat" class="danger hidden">Выйти из чата</button>
                     <button id="btnDeleteGroup" class="danger">Удалить группу</button>
                 </div>
             </div>
@@ -276,6 +277,6 @@
         </div>
     </dialog>
 
-    <script src="/static/app.js"></script>
+  <script src="/static/app.js?v=20260219-2"></script>
 </body>
 </html>
