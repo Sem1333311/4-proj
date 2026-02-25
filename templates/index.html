@@ -8,7 +8,6 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <title>LAN Messenger</title>
     <link rel="stylesheet" href="/static/style.css">
-    <!-- FIXED: Permissions-Policy for WebRTC -->
     <meta http-equiv="Permissions-Policy" content="camera=(self), microphone=(self), display-capture=(self)">
 </head>
 <body>
@@ -36,13 +35,13 @@
             </div>
             
             <div id="loginPane">
-                <input type="text" id="loginUsername" placeholder="Username">
+                <input type="text" id="loginUsername" placeholder="Username" autocapitalize="none">
                 <input type="password" id="loginPassword" placeholder="Пароль">
                 <button id="loginBtn">Войти</button>
             </div>
             
             <div id="registerPane" class="hidden">
-                <input type="text" id="regUsername" placeholder="Username">
+                <input type="text" id="regUsername" placeholder="Username" autocapitalize="none">
                 <input type="password" id="regPassword" placeholder="Пароль">
                 <input type="text" id="regNickname" placeholder="Ник">
                 <button id="registerBtn">Создать аккаунт</button>
@@ -57,7 +56,7 @@
         <!-- Sidebar -->
         <aside class="sidebar panel">
             <div class="profile-mini" id="profileMini"></div>
-            <button id="btnMobileMenu" class="mobile-only">☰</button>
+            <button id="btnMobileMenu" class="mobile-only ghost">☰ Меню</button>
             <div class="quick-tabs">
                 <button id="tabChats" class="quick active">💬</button>
                 <button id="tabRequests" class="quick">📥</button>
@@ -67,7 +66,7 @@
             
             <div id="paneChats" class="tab-pane">
                 <div class="row">
-                    <button id="btnCopyMyId" class="ghost">Скопировать мой ID</button>
+                    <button id="btnCopyMyId" class="ghost">Мой ID</button>
                     <button id="btnProfile">Профиль</button>
                     <button id="btnSettings">Настройки</button>
                 </div>
@@ -75,7 +74,6 @@
                     <button id="btnGroup">Новая группа</button>
                     <button id="btnFriends">Обновить</button>
                 </div>
-                <h3>💬 Чаты</h3>
                 <input type="text" id="chatSearch" placeholder="Поиск чатов...">
                 <div id="chatList" class="list"></div>
             </div>
@@ -96,22 +94,22 @@
             <div id="paneFriends" class="tab-pane hidden">
                 <h3>👥 Друзья</h3>
                 <div id="friendsList" class="list"></div>
-                <button id="btnLogout" class="danger">Выйти</button>
+                <button id="btnLogout" class="danger" style="margin-top: 10px;">Выйти из аккаунта</button>
             </div>
         </aside>
 
         <!-- Chat Area -->
         <main class="chat-area panel">
             <div class="chat-header">
-                <div class="row">
-                    <button id="btnBackToList" class="hidden">←</button>
-                    <h3 id="chatTitle">Выберите чат</h3>
+                <div class="row" style="flex:1;">
+                    <button id="btnBackToList" class="ghost hidden">← Назад</button>
+                    <h3 id="chatTitle" style="margin:0;">Выберите чат</h3>
                 </div>
                 <div class="chat-controls">
-                    <button id="btnCallStart">Звонок</button>
-                    <button id="btnInviteGroup">Пригласить</button>
-                    <button id="btnLeaveChat" class="danger hidden">Выйти из чата</button>
-                    <button id="btnDeleteGroup" class="danger">Удалить группу</button>
+                    <button id="btnCallStart">📞 Звонок</button>
+                    <button id="btnInviteGroup" class="hidden">👤+</button>
+                    <button id="btnLeaveChat" class="danger hidden">Выйти</button>
+                    <button id="btnDeleteGroup" class="danger hidden">Удалить</button>
                 </div>
             </div>
             
@@ -120,18 +118,17 @@
                     <h4>Участники</h4>
                     <div id="chatMembers"></div>
                 </div>
-                
                 <div class="messages" id="messages"></div>
             </div>
             
             <div class="composer">
-                <textarea id="messageInput" placeholder="Сообщение..."></textarea>
+                <textarea id="messageInput" placeholder="Введите сообщение..."></textarea>
                 <div class="composer-actions">
-                    <button id="btnAssets">Эмодзи/стикеры</button>
-                    <button id="btnFile">Файл</button>
-                    <button id="btnVoice">Голос</button>
-                    <button id="btnCircle">Кружок</button>
-                    <button id="sendBtn">Отправить</button>
+                    <button id="btnAssets">😀 Эмодзи</button>
+                    <button id="btnFile">📎 Файл</button>
+                    <button id="btnVoice">🎤 Голос</button>
+                    <button id="btnCircle">📹 Кружок</button>
+                    <button id="sendBtn" style="background: var(--line-accent);">➤ Отправить</button>
                 </div>
                 <input type="file" id="fileInput" class="hidden">
             </div>
@@ -140,143 +137,104 @@
 
     <!-- Call Overlay -->
     <div id="callOverlay" class="call-overlay hidden">
-        <div class="panel call-shell">
+        <div class="call-shell">
             <div class="call-top">
-                <h3 id="callTitle">Звонок 00:00</h3>
-                <div class="row">
-                    <span id="callTimer">00:00</span>
-                    <button id="btnMinimizeCall">Свернуть</button>
-                </div>
+                <h3 id="callTitleText" style="margin:0; text-shadow: 0 1px 3px rgba(0,0,0,0.8);">Звонок <span id="callTimer">00:00</span></h3>
+                <button id="btnMinimizeCall" class="ghost">Свернуть ↙</button>
             </div>
             
             <div id="callGrid" class="call-grid"></div>
             
             <div class="call-actions">
-                <button id="btnToggleMic">Микрофон: вкл</button>
-                <button id="btnToggleCam">Камера: выкл</button>
-                <button id="btnShareScreen">Демонстрация</button>
-                <button id="btnDevices">Устройства</button>
-                <button id="btnLeaveCall" class="danger">Выйти</button>
+                <button id="btnToggleMic">🎤 Микр: ВКЛ</button>
+                <button id="btnToggleCam">📹 Камера: ВЫКЛ</button>
+                <button id="btnShareScreen">💻 Демонстрация</button>
+                <button id="btnDevices">⚙️ Устройства</button>
+                <button id="btnLeaveCall" class="danger">Завершить</button>
             </div>
             
             <div id="devicePanel" class="device-panel hidden">
-                <div>
-                    <label>Микрофон</label>
-                    <select id="selMic"></select>
-                </div>
-                <div>
-                    <label>Камера</label>
-                    <select id="selCam"></select>
-                </div>
-                <div>
-                    <label>Вывод звука</label>
-                    <select id="selSpeaker"></select>
-                </div>
-                <div>
-                    <label>Режим звука</label>
-                    <select id="selAudioMode">
-                        <option value="speaker">Спикер (по умолчанию)</option>
-                        <option value="phone">Телефон</option>
-                    </select>
-                </div>
+                <select id="selMic"></select>
+                <select id="selCam"></select>
+                <select id="selSpeaker"></select>
+                <select id="selAudioMode">
+                    <option value="speaker">Спикер (Громкая связь)</option>
+                    <option value="phone">Телефон (Ухо)</option>
+                </select>
             </div>
         </div>
     </div>
 
     <!-- Incoming Call Toast -->
     <div id="incomingCallToast" class="incoming hidden">
-        <p id="incomingCallText">Входящий звонок</p>
+        <h3 id="incomingCallText" style="margin-top:0;">Входящий звонок</h3>
         <div class="dialog-actions">
-            <button id="btnIncomingAccept">Принять</button>
+            <button id="btnIncomingAccept" style="background: #2a8a47; border-color: #3cb05f;">Принять</button>
             <button id="btnIncomingDecline" class="danger">Отклонить</button>
         </div>
     </div>
 
-    <!-- Minimized Call Button -->
-    <button id="btnCallRestore" class="floating-call hidden">Вернуться в звонок</button>
+    <button id="btnCallRestore" class="floating-call hidden">📞 Вернуться в звонок</button>
 
-    <!-- Profile Dialog -->
+    <!-- Dialogs -->
     <dialog id="profileDialog">
         <h3>Профиль</h3>
         <input type="text" id="profileNickname" placeholder="Ник">
         <textarea id="profileAbout" placeholder="О себе"></textarea>
+        <p class="small" style="margin-top:8px;">Аватар:</p>
         <input type="file" id="profileAvatar" accept="image/*">
         <div class="dialog-actions">
             <button id="profileSave">Сохранить</button>
-            <button id="profileClose">Закрыть</button>
+            <button id="profileClose" class="ghost">Закрыть</button>
         </div>
     </dialog>
 
-    <!-- Group Dialog -->
     <dialog id="groupDialog">
         <h3>Новая группа</h3>
         <input type="text" id="groupTitle" placeholder="Название">
-        <input type="text" id="groupMembers" placeholder="ID друзей через запятую. ID видно в списке друзей как #123">
+        <input type="text" id="groupMembers" placeholder="ID друзей через запятую (напр. 12, 45)">
         <div class="dialog-actions">
             <button id="groupCreate">Создать</button>
-            <button id="groupClose">Закрыть</button>
+            <button id="groupClose" class="ghost">Отмена</button>
         </div>
     </dialog>
 
-    <!-- Settings Dialog -->
     <dialog id="settingsDialog">
         <h3>Приватность и настройки</h3>
-        <label>Заявки в друзья</label>
-        <select id="setFriendReq">
-            <option value="everyone">Все</option>
-            <option value="friends">Только друзья</option>
-            <option value="nobody">Никто</option>
-        </select>
-        <label>Кто может звонить</label>
-        <select id="setCalls">
-            <option value="everyone">Все</option>
-            <option value="friends">Только друзья</option>
-            <option value="nobody">Никто</option>
-        </select>
-        <label>Кто может приглашать в группы</label>
-        <select id="setInvites">
-            <option value="everyone">Все</option>
-            <option value="friends">Только друзья</option>
-            <option value="nobody">Никто</option>
-        </select>
-        <label>Видимость статуса</label>
-        <select id="setLastSeen">
-            <option value="everyone">Все</option>
-            <option value="friends">Только друзья</option>
-            <option value="nobody">Никто</option>
-        </select>
+        <label class="small">Заявки в друзья</label>
+        <select id="setFriendReq"><option value="everyone">Все</option><option value="friends">Только друзья</option><option value="nobody">Никто</option></select>
+        <label class="small">Кто может звонить</label>
+        <select id="setCalls"><option value="everyone">Все</option><option value="friends">Только друзья</option><option value="nobody">Никто</option></select>
+        <label class="small">Приглашения в группы</label>
+        <select id="setInvites"><option value="everyone">Все</option><option value="friends">Только друзья</option><option value="nobody">Никто</option></select>
+        <label class="small">Видимость статуса</label>
+        <select id="setLastSeen"><option value="everyone">Все</option><option value="friends">Только друзья</option><option value="nobody">Никто</option></select>
         
-        <h4>Смена пароля</h4>
+        <h4 style="margin-top:16px;">Смена пароля</h4>
         <input type="password" id="oldPassword" placeholder="Старый пароль">
         <input type="password" id="newPassword" placeholder="Новый пароль">
-        <button id="btnChangePassword">Сменить пароль</button>
+        <button id="btnChangePassword" class="ghost" style="border: 1px solid var(--line);">Сменить пароль</button>
         
-        <h4>Заблокированные</h4>
+        <h4 style="margin-top:16px;">Заблокированные</h4>
         <div id="blockedList" class="list compact"></div>
         
         <div class="dialog-actions">
             <button id="settingsSave">Сохранить</button>
             <button id="btnDeleteAccount" class="danger">Удалить аккаунт</button>
-            <button id="settingsClose">Закрыть</button>
+            <button id="settingsClose" class="ghost">Закрыть</button>
         </div>
     </dialog>
 
-    <!-- Assets Dialog -->
     <dialog id="assetsDialog">
-        <h3>Мои эмодзи и стикеры</h3>
-        <select id="assetKind">
-            <option value="emoji">Emoji</option>
-            <option value="sticker">Sticker</option>
-        </select>
+        <h3>Мои стикеры</h3>
+        <select id="assetKind"><option value="emoji">Emoji</option><option value="sticker">Sticker</option></select>
         <input type="text" id="assetTitle" placeholder="Название">
         <input type="file" id="assetFile" accept="image/*,video/*">
-        <button id="btnUploadAsset">Загрузить</button>
+        <button id="btnUploadAsset" class="ghost" style="border:1px solid var(--line);">Загрузить</button>
         <div id="assetsList" class="list"></div>
-        <div class="dialog-actions">
-            <button id="assetsClose">Закрыть</button>
-        </div>
+        <div class="dialog-actions"><button id="assetsClose" class="ghost">Закрыть</button></div>
     </dialog>
 
-  <script src="/static/app.js?v=20260219-2"></script>
+    <script src="/static/app.js"></script>
 </body>
 </html>
