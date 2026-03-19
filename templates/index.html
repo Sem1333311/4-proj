@@ -1,9 +1,9 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <meta name="theme-color" content="#111316">
+    <meta name="theme-color" content="#0b1420">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <title>LAN Messenger</title>
@@ -11,140 +11,248 @@
     <meta http-equiv="Permissions-Policy" content="camera=(self), microphone=(self), display-capture=(self)">
 </head>
 <body>
-    <!-- Gate Screen -->
     <div id="gateScreen" class="screen">
-        <div class="panel auth-panel">
-            <h1>LAN Messenger</h1>
-            <p>Код доступа</p>
-            <input type="password" id="gateCode" placeholder="Введите код">
-            <div class="row">
-                <input type="checkbox" id="rememberCode" style="width:auto;">
-                <label for="rememberCode" style="margin:0;">Запомнить код на этом устройстве</label>
-            </div>
-            <button id="gateBtn">Продолжить</button>
-            <div id="gateError" class="error"></div>
+        <div class="auth-shell">
+            <section class="panel auth-showcase glass">
+                <div class="brand-mark">LM</div>
+                <p class="eyebrow">Secure LAN Messenger</p>
+                <h1>Интерфейс в духе Telegram и Discord</h1>
+                <p class="auth-copy">
+                    Быстрый чат для локальной сети с аккуратной адаптацией под Windows-браузеры,
+                    Android и iOS Safari.
+                </p>
+                <div class="auth-points">
+                    <span>Личные чаты</span>
+                    <span>Группы и звонки</span>
+                    <span>Файлы, голос, кружки</span>
+                    <span>Оптимизировано под touch и мышь</span>
+                </div>
+            </section>
+
+            <section class="panel auth-panel glass">
+                <p class="eyebrow">Доступ</p>
+                <h2>Вход в пространство</h2>
+                <p class="auth-copy">Введите код доступа, чтобы открыть мессенджер.</p>
+                <input type="password" id="gateCode" placeholder="Введите код">
+                <label class="toggle-row" for="rememberCode">
+                    <input type="checkbox" id="rememberCode">
+                    <span>Запомнить код на этом устройстве</span>
+                </label>
+                <button id="gateBtn">Продолжить</button>
+                <div id="gateError" class="error"></div>
+            </section>
         </div>
     </div>
 
-    <!-- Auth Screen -->
     <div id="authScreen" class="screen hidden">
-        <div class="panel auth-panel">
-            <div class="tabs">
-                <button id="tabLogin" class="tab active">Вход</button>
-                <button id="tabRegister" class="tab">Регистрация</button>
-            </div>
-            
-            <div id="loginPane">
-                <input type="text" id="loginUsername" placeholder="Username" autocapitalize="none">
-                <input type="password" id="loginPassword" placeholder="Пароль">
-                <button id="loginBtn">Войти</button>
-            </div>
-            
-            <div id="registerPane" class="hidden">
-                <input type="text" id="regUsername" placeholder="Username" autocapitalize="none">
-                <input type="password" id="regPassword" placeholder="Пароль">
-                <input type="text" id="regNickname" placeholder="Ник">
-                <button id="registerBtn">Создать аккаунт</button>
-            </div>
-            
-            <div id="authError" class="error"></div>
+        <div class="auth-shell compact">
+            <section class="panel auth-showcase glass">
+                <div class="brand-mark">LM</div>
+                <p class="eyebrow">Вход и регистрация</p>
+                <h1>Откройте свой профиль</h1>
+                <p class="auth-copy">
+                    Всё готово для desktop и mobile: крупные контролы, удобная навигация,
+                    безопасные зоны и чистая иерархия интерфейса.
+                </p>
+            </section>
+
+            <section class="panel auth-panel glass">
+                <div class="tabs">
+                    <button id="tabLogin" class="tab active">Вход</button>
+                    <button id="tabRegister" class="tab">Регистрация</button>
+                </div>
+
+                <div id="loginPane">
+                    <input type="text" id="loginUsername" placeholder="Username" autocapitalize="none">
+                    <input type="password" id="loginPassword" placeholder="Пароль">
+                    <button id="loginBtn">Войти</button>
+                </div>
+
+                <div id="registerPane" class="hidden">
+                    <input type="text" id="regUsername" placeholder="Username" autocapitalize="none">
+                    <input type="password" id="regPassword" placeholder="Пароль">
+                    <input type="text" id="regNickname" placeholder="Ник">
+                    <button id="registerBtn">Создать аккаунт</button>
+                </div>
+
+                <div id="authError" class="error"></div>
+            </section>
         </div>
     </div>
 
-    <!-- Main App -->
     <div id="app" class="hidden">
-        <!-- Sidebar -->
-        <aside class="sidebar panel">
-            <div class="profile-mini" id="profileMini"></div>
-            <button id="btnMobileMenu" class="mobile-only ghost">☰ Меню</button>
-            <div class="quick-tabs">
-                <button id="tabChats" class="quick active">💬</button>
-                <button id="tabRequests" class="quick">📥</button>
-                <button id="tabSearch" class="quick">🔎</button>
-                <button id="tabFriends" class="quick">👥</button>
+        <aside class="workspace-rail panel glass">
+            <div class="workspace-brand">
+                <div class="brand-mark small">LM</div>
+                <span class="workspace-caption">LAN</span>
             </div>
-            
-            <div id="paneChats" class="tab-pane">
-                <div class="row">
+
+            <div class="quick-tabs">
+                <button id="tabChats" class="quick active" aria-label="Чаты">
+                    <span class="quick-glyph">💬</span>
+                    <span class="quick-label">Чаты</span>
+                </button>
+                <button id="tabRequests" class="quick" aria-label="Заявки">
+                    <span class="quick-glyph">📥</span>
+                    <span class="quick-label">Запросы</span>
+                </button>
+                <button id="tabSearch" class="quick" aria-label="Поиск">
+                    <span class="quick-glyph">🔎</span>
+                    <span class="quick-label">Поиск</span>
+                </button>
+                <button id="tabFriends" class="quick" aria-label="Друзья">
+                    <span class="quick-glyph">👥</span>
+                    <span class="quick-label">Друзья</span>
+                </button>
+            </div>
+        </aside>
+
+        <aside class="sidebar panel glass">
+            <div class="sidebar-top">
+                <div class="profile-mini" id="profileMini"></div>
+
+                <div class="sidebar-actions">
                     <button id="btnCopyMyId" class="ghost">Мой ID</button>
                     <button id="btnProfile">Профиль</button>
                     <button id="btnSettings">Настройки</button>
                 </div>
-                <div class="row">
-                    <button id="btnGroup">Новая группа</button>
-                    <button id="btnFriends">Обновить</button>
+            </div>
+
+            <div id="paneChats" class="tab-pane">
+                <div class="pane-header">
+                    <div>
+                        <p class="eyebrow">Диалоги</p>
+                        <h3>Чаты</h3>
+                    </div>
+                    <div class="row pane-actions">
+                        <button id="btnGroup">Новая группа</button>
+                        <button id="btnFriends">Обновить</button>
+                    </div>
                 </div>
-                <input type="text" id="chatSearch" placeholder="Поиск чатов...">
-                <div id="chatList" class="list"></div>
+
+                <div class="search-wrap">
+                    <input type="text" id="chatSearch" placeholder="Поиск чатов...">
+                </div>
+
+                <div id="chatList" class="list chat-list"></div>
             </div>
-            
+
             <div id="paneRequests" class="tab-pane hidden">
-                <h3>📥 Заявки в друзья</h3>
-                <div id="friendRequests" class="list"></div>
-                <h3>📨 Инвайты в группы</h3>
-                <div id="groupInvites" class="list compact"></div>
+                <div class="pane-header">
+                    <div>
+                        <p class="eyebrow">Уведомления</p>
+                        <h3>Заявки и инвайты</h3>
+                    </div>
+                </div>
+
+                <div class="section-block">
+                    <div class="section-title">Заявки в друзья</div>
+                    <div id="friendRequests" class="list"></div>
+                </div>
+
+                <div class="section-block">
+                    <div class="section-title">Инвайты в группы</div>
+                    <div id="groupInvites" class="list compact"></div>
+                </div>
             </div>
-            
+
             <div id="paneSearch" class="tab-pane hidden">
-                <h3>🔎 Поиск людей</h3>
-                <input type="text" id="userSearch" placeholder="Username или ник...">
+                <div class="pane-header">
+                    <div>
+                        <p class="eyebrow">Поиск</p>
+                        <h3>Найти пользователя</h3>
+                    </div>
+                </div>
+
+                <div class="search-wrap">
+                    <input type="text" id="userSearch" placeholder="Username или ник...">
+                </div>
+
                 <div id="userResults" class="list"></div>
             </div>
-            
+
             <div id="paneFriends" class="tab-pane hidden">
-                <h3>👥 Друзья</h3>
+                <div class="pane-header">
+                    <div>
+                        <p class="eyebrow">Контакты</p>
+                        <h3>Друзья</h3>
+                    </div>
+                </div>
+
                 <div id="friendsList" class="list"></div>
-                <button id="btnLogout" class="danger" style="margin-top: 10px;">Выйти из аккаунта</button>
+                <button id="btnLogout" class="danger logout-button">Выйти из аккаунта</button>
             </div>
         </aside>
 
-        <!-- Chat Area -->
-        <main class="chat-area panel">
+        <main class="chat-area panel glass">
             <div class="chat-header">
-                <div class="row" style="flex:1;">
+                <div class="chat-header-main">
                     <button id="btnBackToList" class="ghost hidden">← Назад</button>
-                    <h3 id="chatTitle" style="margin:0;">Выберите чат</h3>
+                    <div id="chatAvatar" class="chat-avatar">
+                        <div class="avatar avatar-xl avatar-placeholder">LM</div>
+                    </div>
+                    <div class="chat-heading">
+                        <h3 id="chatTitle">Выберите чат</h3>
+                        <p id="chatMeta" class="chat-meta">Откройте диалог слева или создайте новую группу.</p>
+                    </div>
                 </div>
+
                 <div class="chat-controls">
+                    <button id="btnMobileMenu" class="mobile-only ghost">Разделы</button>
                     <button id="btnCallStart">📞 Звонок</button>
-                    <button id="btnInviteGroup" class="hidden">👤+</button>
+                    <button id="btnInviteGroup" class="hidden">👤+ Инвайт</button>
                     <button id="btnLeaveChat" class="danger hidden">Выйти</button>
                     <button id="btnDeleteGroup" class="danger hidden">Удалить</button>
                 </div>
             </div>
-            
+
             <div class="chat-stack">
                 <div id="groupMembersPanel" class="group-members hidden">
-                    <h4>Участники</h4>
-                    <div id="chatMembers"></div>
+                    <div class="group-members-head">
+                        <p class="eyebrow">Состав</p>
+                        <h4>Участники</h4>
+                    </div>
+                    <div id="chatMembers" class="member-list"></div>
                 </div>
-                <div class="messages" id="messages"></div>
+
+                <div class="chat-main">
+                    <div id="chatEmptyState" class="chat-empty">
+                        <div class="chat-empty-card">
+                            <div class="brand-mark mid">LM</div>
+                            <h3>Выберите чат</h3>
+                            <p>
+                                Слева доступны диалоги, друзья, поиск пользователей и запросы.
+                                Интерфейс уже подготовлен под desktop, Android и iOS Safari.
+                            </p>
+                        </div>
+                    </div>
+                    <div class="messages" id="messages"></div>
+                </div>
             </div>
-            
+
             <div class="composer">
-                <textarea id="messageInput" placeholder="Введите сообщение..."></textarea>
+                <textarea id="messageInput" placeholder="Напишите сообщение..."></textarea>
                 <div class="composer-actions">
                     <button id="btnAssets">😀 Эмодзи</button>
                     <button id="btnFile">📎 Файл</button>
                     <button id="btnVoice">🎤 Голос</button>
                     <button id="btnCircle">📹 Кружок</button>
-                    <button id="sendBtn" style="background: var(--line-accent);">➤ Отправить</button>
+                    <button id="sendBtn">➤ Отправить</button>
                 </div>
                 <input type="file" id="fileInput" class="hidden">
             </div>
         </main>
     </div>
 
-    <!-- Call Overlay -->
     <div id="callOverlay" class="call-overlay hidden">
         <div class="call-shell">
             <div class="call-top">
-                <h3 id="callTitleText" style="margin:0; text-shadow: 0 1px 3px rgba(0,0,0,0.8);">Звонок <span id="callTimer">00:00</span></h3>
+                <h3 id="callTitleText">Звонок <span id="callTimer">00:00</span></h3>
                 <button id="btnMinimizeCall" class="ghost">Свернуть ↙</button>
             </div>
-            
+
             <div id="callGrid" class="call-grid"></div>
-            
+
             <div class="call-actions">
                 <button id="btnToggleMic">🎤 Микр: ВКЛ</button>
                 <button id="btnToggleCam">📹 Камера: ВЫКЛ</button>
@@ -152,7 +260,7 @@
                 <button id="btnDevices">⚙️ Устройства</button>
                 <button id="btnLeaveCall" class="danger">Завершить</button>
             </div>
-            
+
             <div id="devicePanel" class="device-panel hidden">
                 <select id="selMic"></select>
                 <select id="selCam"></select>
@@ -165,23 +273,21 @@
         </div>
     </div>
 
-    <!-- Incoming Call Toast -->
     <div id="incomingCallToast" class="incoming hidden">
-        <h3 id="incomingCallText" style="margin-top:0;">Входящий звонок</h3>
+        <h3 id="incomingCallText">Входящий звонок</h3>
         <div class="dialog-actions">
-            <button id="btnIncomingAccept" style="background: #2a8a47; border-color: #3cb05f;">Принять</button>
+            <button id="btnIncomingAccept" class="success">Принять</button>
             <button id="btnIncomingDecline" class="danger">Отклонить</button>
         </div>
     </div>
 
     <button id="btnCallRestore" class="floating-call hidden">📞 Вернуться в звонок</button>
 
-    <!-- Dialogs -->
     <dialog id="profileDialog">
         <h3>Профиль</h3>
         <input type="text" id="profileNickname" placeholder="Ник">
         <textarea id="profileAbout" placeholder="О себе"></textarea>
-        <p class="small" style="margin-top:8px;">Аватар:</p>
+        <p class="small">Аватар</p>
         <input type="file" id="profileAvatar" accept="image/*">
         <div class="dialog-actions">
             <button id="profileSave">Сохранить</button>
@@ -192,7 +298,7 @@
     <dialog id="groupDialog">
         <h3>Новая группа</h3>
         <input type="text" id="groupTitle" placeholder="Название">
-        <input type="text" id="groupMembers" placeholder="ID друзей через запятую (напр. 12, 45)">
+        <input type="text" id="groupMembers" placeholder="ID друзей через запятую, например: 12, 45">
         <div class="dialog-actions">
             <button id="groupCreate">Создать</button>
             <button id="groupClose" class="ghost">Отмена</button>
@@ -202,22 +308,38 @@
     <dialog id="settingsDialog">
         <h3>Приватность и настройки</h3>
         <label class="small">Заявки в друзья</label>
-        <select id="setFriendReq"><option value="everyone">Все</option><option value="friends">Только друзья</option><option value="nobody">Никто</option></select>
+        <select id="setFriendReq">
+            <option value="everyone">Все</option>
+            <option value="friends">Только друзья</option>
+            <option value="nobody">Никто</option>
+        </select>
         <label class="small">Кто может звонить</label>
-        <select id="setCalls"><option value="everyone">Все</option><option value="friends">Только друзья</option><option value="nobody">Никто</option></select>
+        <select id="setCalls">
+            <option value="everyone">Все</option>
+            <option value="friends">Только друзья</option>
+            <option value="nobody">Никто</option>
+        </select>
         <label class="small">Приглашения в группы</label>
-        <select id="setInvites"><option value="everyone">Все</option><option value="friends">Только друзья</option><option value="nobody">Никто</option></select>
+        <select id="setInvites">
+            <option value="everyone">Все</option>
+            <option value="friends">Только друзья</option>
+            <option value="nobody">Никто</option>
+        </select>
         <label class="small">Видимость статуса</label>
-        <select id="setLastSeen"><option value="everyone">Все</option><option value="friends">Только друзья</option><option value="nobody">Никто</option></select>
-        
-        <h4 style="margin-top:16px;">Смена пароля</h4>
+        <select id="setLastSeen">
+            <option value="everyone">Все</option>
+            <option value="friends">Только друзья</option>
+            <option value="nobody">Никто</option>
+        </select>
+
+        <h4>Смена пароля</h4>
         <input type="password" id="oldPassword" placeholder="Старый пароль">
         <input type="password" id="newPassword" placeholder="Новый пароль">
-        <button id="btnChangePassword" class="ghost" style="border: 1px solid var(--line);">Сменить пароль</button>
-        
-        <h4 style="margin-top:16px;">Заблокированные</h4>
+        <button id="btnChangePassword" class="ghost dialog-inline">Сменить пароль</button>
+
+        <h4>Заблокированные</h4>
         <div id="blockedList" class="list compact"></div>
-        
+
         <div class="dialog-actions">
             <button id="settingsSave">Сохранить</button>
             <button id="btnDeleteAccount" class="danger">Удалить аккаунт</button>
@@ -227,12 +349,17 @@
 
     <dialog id="assetsDialog">
         <h3>Мои стикеры</h3>
-        <select id="assetKind"><option value="emoji">Emoji</option><option value="sticker">Sticker</option></select>
+        <select id="assetKind">
+            <option value="emoji">Emoji</option>
+            <option value="sticker">Sticker</option>
+        </select>
         <input type="text" id="assetTitle" placeholder="Название">
         <input type="file" id="assetFile" accept="image/*,video/*">
-        <button id="btnUploadAsset" class="ghost" style="border:1px solid var(--line);">Загрузить</button>
+        <button id="btnUploadAsset" class="ghost dialog-inline">Загрузить</button>
         <div id="assetsList" class="list"></div>
-        <div class="dialog-actions"><button id="assetsClose" class="ghost">Закрыть</button></div>
+        <div class="dialog-actions">
+            <button id="assetsClose" class="ghost">Закрыть</button>
+        </div>
     </dialog>
 
     <script src="/static/app.js"></script>

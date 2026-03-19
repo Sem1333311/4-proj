@@ -88,7 +88,7 @@ const state = {
   function setChatOpen(open) {
     state.ui.chatOpen = !!open;
     document.body.classList.toggle("chat-open", state.ui.chatOpen);
-    if (window.innerWidth <= 820) {
+    if (window.innerWidth <= 980) {
         document.body.classList.toggle("menu-open", !state.ui.chatOpen);
     }
     const back = qs("btnBackToList");
@@ -109,8 +109,41 @@ const state = {
     if (el) el.textContent = text || "";
   }
   
+  function syncViewportHeight() {
+    const height = Math.round(window.visualViewport?.height || window.innerHeight || document.documentElement.clientHeight || 0);
+    if (height > 0) {
+        document.documentElement.style.setProperty("--app-height", `${height}px`);
+    }
+  }
+  
+  function installResponsiveEnvironment() {
+    document.body.classList.toggle("platform-ios", isLikelyIOS);
+    document.body.classList.toggle("platform-android", isLikelyAndroid);
+    document.body.classList.toggle("platform-safari", isLikelySafari);
+    document.body.classList.toggle("platform-mobile", isMobile);
+    syncViewportHeight();
+    if (!window.__lanMessengerViewportBound) {
+        window.addEventListener("resize", syncViewportHeight);
+        window.visualViewport?.addEventListener("resize", syncViewportHeight);
+        window.__lanMessengerViewportBound = true;
+    }
+  }
+  
   function formatTime(iso) {
-    return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    const date = new Date(iso);
+    if (Number.isNaN(date.getTime())) return "";
+    return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  }
+  
+  function formatListTime(iso) {
+    if (!iso) return "";
+    const date = new Date(iso);
+    if (Number.isNaN(date.getTime())) return "";
+    const now = new Date();
+    if (date.toDateString() === now.toDateString()) {
+        return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    }
+    return date.toLocaleDateString([], { day: "2-digit", month: "2-digit" });
   }
   
   function fmtDuration(sec) {
@@ -175,21 +208,138 @@ const state = {
     return `${url}${url.includes("?") ? "&" : "?"}token=${encodeURIComponent(state.token)}`;
   }
   
+  function avatarMediaUrl(avatar) {
+    if (!avatar) return "";
+    const fileName = String(avatar);
+    return withMediaToken(fileName.startsWith("/media/") ? fileName : `/media/${encodeURIComponent(fileName)}`);
+  }
+  
+  function truncateText(text, limit = 96) {
+    const clean = String(text || "").trim();
+    if (!clean) return "";
+    return clean.length > limit ? `${clean.slice(0, limit).trimEnd()}...` : clean;
+  }
+  
+  function toMultilineHtml(text) {
+    return escapeHtml(text || "").replace(/\n/g, "<br>");
+  }
+  
+  function seedHue(seed) {
+    const source = String(seed || "lm");
+    let hash = 0;
+    for (let i = 0; i < source.length; i += 1) {
+        hash = (hash * 31 + source.charCodeAt(i)) % 360;
+    }
+    return Math.abs(hash);
+  }
+  
+  function initialsFromLabel(label) {
+    const clean = String(label || "").trim();
+    if (!clean) return "LM";
+    const parts = clean.split(/\s+/).filter(Boolean);
+    const letters = parts.slice(0, 2).map((part) => part[0]).join("");
+    return (letters || clean.slice(0, 2)).toUpperCase();
+  }
+  
+  function avatarMarkup({ avatar, label, seed, className = "avatar-md" }) {
+    const classes = ["avatar", className].filter(Boolean).join(" ");
+    const title = escapeHtml(label || "LM");
+    const url = avatarMediaUrl(avatar);
+    if (url) {
+        return `<img class="${classes}" src="${url}" alt="${title}" loading="lazy">`;
+    }
+    return `<div class="${classes}" style="--avatar-hue:${seedHue(seed || label || "lm")}">${escapeHtml(initialsFromLabel(label))}</div>`;
+  }
+  
+  function describeMemberRole(role) {
+    const labels = {
+        owner: "Владелец",
+        admin: "Админ",
+        member: "Участник",
+    };
+    return labels[role] || role || "Участник";
+  }
+  
+  function chatTitleText(chat) {
+    return chat ? (chat.title || chat.peer?.nickname || "Чат") : "Выберите чат";
+  }
+  
+  function chatMetaText(chat) {
+    if (!chat) return "Откройте диалог слева или создайте новую группу.";
+    if (chat.type === "group") {
+        const count = state.membersById.size;
+        return count ? `${count} участников` : "Групповой чат";
+    }
+    if (chat.peer?.username) {
+        return `@${chat.peer.username}`;
+    }
+    return "Личный чат";
+  }
+  
+  function setComposerEnabled(enabled) {
+    const input = qs("messageInput");
+    if (input) {
+        input.disabled = !enabled;
+        input.placeholder = enabled ? "Напишите сообщение..." : "Выберите чат, чтобы начать переписку";
+    }
+    ["sendBtn", "btnAssets", "btnFile", "btnVoice", "btnCircle"].forEach((id) => {
+        const btn = qs(id);
+        if (btn) btn.disabled = !enabled;
+    });
+  }
+  
+  function setEmptyState(showEmpty) {
+    const empty = qs("chatEmptyState");
+    const messages = qs("messages");
+    if (showEmpty) {
+        show(empty);
+        hide(messages);
+    } else {
+        hide(empty);
+        show(messages);
+    }
+    setComposerEnabled(!showEmpty);
+  }
+  
   function messageBody(m) {
-    const text = escapeHtml(m.text || "");
-    if (!m.file_url) return text;
+    const text = toMultilineHtml(m.text || "");
+    const parts = [];
+    if (text) {
+        parts.push(`<div class="message-text">${text}</div>`);
+    }
+    if (!m.file_url) return parts.join("");
     const fileUrl = withMediaToken(m.file_url);
-    if (m.kind === "image" || m.kind === "sticker" || m.kind === "emoji") return `${text}<br><img src="${fileUrl}" />`;
-    if (m.kind === "video" || m.kind === "circle") return `${text}<br><video src="${fileUrl}" controls playsinline webkit-playsinline preload="metadata"></video>`;
-    if (m.kind === "voice") return `${text}<br><audio src="${fileUrl}" controls preload="metadata"></audio>`;
-    return `${text}<br><a href="${fileUrl}" target="_blank">${escapeHtml(m.file_name || "Файл")}</a>`;
+    if (m.kind === "image" || m.kind === "sticker" || m.kind === "emoji") {
+        parts.push(`<img src="${fileUrl}" alt="${escapeHtml(m.file_name || "Вложение")}" loading="lazy">`);
+        return parts.join("");
+    }
+    if (m.kind === "video" || m.kind === "circle") {
+        parts.push(`<video src="${fileUrl}" controls playsinline webkit-playsinline preload="metadata"></video>`);
+        return parts.join("");
+    }
+    if (m.kind === "voice") {
+        parts.push(`<audio src="${fileUrl}" controls preload="metadata"></audio>`);
+        return parts.join("");
+    }
+    return `${text ? `${text}<br>` : ""}<a href="${fileUrl}" target="_blank">${escapeHtml(m.file_name || "Файл")}</a>`;
   }
   
   function appendMessage(m) {
+    const mine = m.user_id === state.me?.id;
     const item = document.createElement("div");
     item.dataset.mid = String(m.id);
-    item.className = `message ${m.user_id === state.me?.id ? "mine" : ""}`;
-    item.innerHTML = `<div class="meta">${escapeHtml(m.nickname)} @${escapeHtml(m.username)} ${formatTime(m.created_at)}</div><div>${messageBody(m)}</div>`;
+    item.className = `message ${mine ? "mine" : ""}`;
+    item.innerHTML = `
+        ${mine ? "" : avatarMarkup({ avatar: m.avatar, label: m.nickname, seed: `user-${m.user_id}`, className: "avatar-sm" })}
+        <div class="message-bubble">
+            <div class="message-meta">
+                <span class="message-author">${escapeHtml(m.nickname)}</span>
+                <span>@${escapeHtml(m.username)}</span>
+                <span>${formatTime(m.created_at)}</span>
+            </div>
+            <div class="message-content">${messageBody(m)}</div>
+        </div>
+    `;
     const actions = document.createElement("div");
     actions.className = "message-actions";
     const delMe = document.createElement("button");
@@ -204,7 +354,7 @@ const state = {
         }
     };
     actions.appendChild(delMe);
-    if (m.user_id === state.me?.id) {
+    if (mine) {
         const delAll = document.createElement("button");
         delAll.className = "danger";
         delAll.textContent = "Удалить у всех";
@@ -218,7 +368,7 @@ const state = {
         };
         actions.appendChild(delAll);
     }
-    item.appendChild(actions);
+    item.querySelector(".message-bubble")?.appendChild(actions);
     const messages = qs("messages");
     if (messages) {
         messages.appendChild(item);
@@ -234,7 +384,20 @@ const state = {
   function renderProfileMini() {
     if (!state.me) return;
     const el = qs("profileMini");
-    if (el) el.innerHTML = `${escapeHtml(state.me.nickname)} <span class="small">@${escapeHtml(state.me.username)} #${state.me.id}</span>`;
+    if (el) {
+        const about = truncateText(state.me.about, 82);
+        el.innerHTML = `
+            <div class="profile-card">
+                ${avatarMarkup({ avatar: state.me.avatar, label: state.me.nickname, seed: `me-${state.me.id}`, className: "avatar-lg" })}
+                <div class="profile-card-copy">
+                    <strong>${escapeHtml(state.me.nickname)}</strong>
+                    <span>@${escapeHtml(state.me.username)}</span>
+                    ${about ? `<p>${escapeHtml(about)}</p>` : ""}
+                </div>
+                <div class="profile-id">#${state.me.id}</div>
+            </div>
+        `;
+    }
   }
   
   function renderChatList(filter = "") {
@@ -242,6 +405,49 @@ const state = {
     const list = qs("chatList");
     if (!list) return;
     list.innerHTML = "";
+    state.chats
+        .filter((c) => {
+            const haystack = [
+                c.title,
+                c.peer?.nickname,
+                c.peer?.username,
+                c.last_text,
+            ].filter(Boolean).join(" ").toLowerCase();
+            return !q || haystack.includes(q);
+        })
+        .forEach((chat) => {
+            const title = chatTitleText(chat);
+            const preview = truncateText(chat.last_text || (chat.type === "group" ? "Групповой чат" : "Начните новый диалог"), 88);
+            const subtitle = chat.type === "group"
+                ? "Группа"
+                : (chat.peer?.username ? `@${chat.peer.username}` : "Личный чат");
+            const el = document.createElement("div");
+            el.className = `item ${chat.id === state.currentChatId ? "selected" : ""}`;
+            el.innerHTML = `
+                <div class="item-head">
+                    ${avatarMarkup({
+                        avatar: chat.peer?.avatar,
+                        label: title,
+                        seed: `chat-${chat.id}-${title}`,
+                        className: "avatar-md",
+                    })}
+                    <div class="item-copy">
+                        <div class="item-title-row">
+                            <b>${escapeHtml(title)}</b>
+                            <span class="item-time">${escapeHtml(formatListTime(chat.last_at) || "")}</span>
+                        </div>
+                        <small>${escapeHtml(subtitle)}</small>
+                        <p class="item-preview">${escapeHtml(preview)}</p>
+                    </div>
+                </div>
+                <div class="item-tags">
+                    <span class="item-tag">${chat.type === "group" ? "Group" : "DM"}</span>
+                </div>
+            `;
+            el.onclick = () => openChat(chat.id);
+            list.appendChild(el);
+        });
+    return;
     state.chats
         .filter((c) => !q || (c.title || c.peer?.nickname || "Без названия").toLowerCase().includes(q))
         .forEach((chat) => {
@@ -256,7 +462,9 @@ const state = {
   function setChatHeader(chat) {
     const title = chat ? escapeHtml(chat.title || chat.peer?.nickname || "Чат") : "Выберите чат";
     const titleEl = qs("chatTitle");
-    if (titleEl) titleEl.innerHTML = title;
+    const titleText = chatTitleText(chat);
+    const metaEl = qs("chatMeta");
+    const avatarEl = qs("chatAvatar");
     const canCall = !!chat && !!chat.can_call;
     const group = !!chat && chat.type === "group";
     const canDelete = !!chat && chat.type === "group" && !!chat.can_delete;
@@ -266,10 +474,37 @@ const state = {
     const btnLeave = qs("btnLeaveChat");
     const btnDelete = qs("btnDeleteGroup");
     const membersPanel = qs("groupMembersPanel");
-    
+    if (titleEl) titleEl.textContent = titleText;
+    if (metaEl) metaEl.textContent = chatMetaText(chat);
+    if (avatarEl) {
+        avatarEl.innerHTML = avatarMarkup({
+            avatar: chat?.peer?.avatar,
+            label: titleText,
+            seed: chat ? `chat-${chat.id}-${titleText}` : "empty-chat",
+            className: "avatar-xl avatar-placeholder",
+        });
+    }
+    if (!chat) {
+        state.membersById = new Map();
+    }
     if (canCall) show(btnCall); else hide(btnCall);
     if (group) show(btnInvite); else hide(btnInvite);
     if (chat) show(btnLeave); else hide(btnLeave);
+    if (btnLeave) btnLeave.textContent = group ? "Выйти из группы" : "Выйти из чата";
+    if (canDelete) show(btnDelete); else hide(btnDelete);
+    if (group) show(membersPanel); else hide(membersPanel);
+    if (stack) stack.classList.toggle("has-members", group);
+    setEmptyState(!chat);
+    const screenBtn = qs("btnShareScreen");
+    if (screenBtn) {
+        if (isMobile || !(navigator.mediaDevices && "getDisplayMedia" in navigator.mediaDevices)) {
+            hide(screenBtn);
+            screenBtn.title = "Демонстрация экрана недоступна на мобильных устройствах";
+        } else {
+            show(screenBtn);
+        }
+    }
+    return;
     if (btnLeave) btnLeave.textContent = group ? "Выйти из группы" : "Выйти из чата";
     if (canDelete) show(btnDelete); else hide(btnDelete);
     if (group) show(membersPanel); else hide(membersPanel);
@@ -293,6 +528,49 @@ const state = {
     const wrap = qs("chatMembers");
     if (!wrap) return;
     wrap.innerHTML = "";
+    members.forEach((m) => {
+        const el = document.createElement("div");
+        el.className = "item";
+        el.innerHTML = `
+            <div class="item-head">
+                ${avatarMarkup({ avatar: m.avatar, label: m.nickname, seed: `member-${m.id}`, className: "avatar-sm" })}
+                <div class="item-copy">
+                    <div class="item-title-row">
+                        <b>${escapeHtml(m.nickname)}</b>
+                        <span class="item-tag">${escapeHtml(describeMemberRole(m.role))}</span>
+                    </div>
+                    <small>@${escapeHtml(m.username)} #${m.id}</small>
+                </div>
+            </div>
+        `;
+        const actions = document.createElement("div");
+        actions.className = "actions";
+        const dm = document.createElement("button");
+        dm.textContent = "ЛС";
+        dm.onclick = async () => {
+            if (m.id === state.me.id) return;
+            const out = await api("/api/chats/direct", { method: "POST", body: JSON.stringify({ user_id: m.id }) });
+            await loadChats();
+            await openChat(out.chat_id);
+        };
+        const call = document.createElement("button");
+        call.textContent = "Позвонить";
+        call.onclick = async () => {
+            if (m.id === state.me.id) return;
+            const out = await api("/api/chats/direct", { method: "POST", body: JSON.stringify({ user_id: m.id }) });
+            await loadChats();
+            await openChat(out.chat_id);
+            await startCall();
+        };
+        actions.appendChild(dm);
+        actions.appendChild(call);
+        el.appendChild(actions);
+        wrap.appendChild(el);
+    });
+    if (state.currentChatId === chatId) {
+        setChatHeader(state.currentChat);
+    }
+    return;
     members.forEach((m) => {
         const el = document.createElement("div");
         el.className = "item";
@@ -327,9 +605,10 @@ const state = {
     const chat = state.chats.find((c) => c.id === chatId) || null;
     state.currentChat = chat;
     state.currentChatId = chatId;
+    state.membersById = new Map();
     setChatHeader(chat);
     setChatOpen(true);
-    if (window.innerWidth <= 820) document.body.classList.remove("menu-open");
+    if (window.innerWidth <= 980) document.body.classList.remove("menu-open");
     const messages = qs("messages");
     if (messages) messages.innerHTML = "";
     const data = await api(`/api/chats/${chatId}/messages`);
@@ -366,6 +645,44 @@ const state = {
     state.friends.forEach((f) => {
         const el = document.createElement("div");
         el.className = "item";
+        el.innerHTML = `
+            <div class="item-head">
+                ${avatarMarkup({ avatar: f.avatar, label: f.nickname, seed: `friend-${f.id}`, className: "avatar-md" })}
+                <div class="item-copy">
+                    <div class="item-title-row">
+                        <b>${escapeHtml(f.nickname)}</b>
+                        <span class="item-tag">Friend</span>
+                    </div>
+                    <small>@${escapeHtml(f.username)} #${f.id}</small>
+                    ${f.about ? `<p class="item-preview">${escapeHtml(truncateText(f.about, 90))}</p>` : ""}
+                </div>
+            </div>
+        `;
+        const actions = document.createElement("div");
+        actions.className = "actions";
+        const dm = document.createElement("button");
+        dm.textContent = "Чат";
+        dm.onclick = async () => {
+            const out = await api("/api/chats/direct", { method: "POST", body: JSON.stringify({ user_id: f.id }) });
+            await loadChats();
+            await openChat(out.chat_id);
+        };
+        const block = document.createElement("button");
+        block.className = "danger";
+        block.textContent = "Блок";
+        block.onclick = async () => {
+            await api(`/api/users/${f.id}/block`, { method: "POST", body: "{}" });
+            await refreshSide();
+        };
+        actions.appendChild(dm);
+        actions.appendChild(block);
+        el.appendChild(actions);
+        list.appendChild(el);
+    });
+    return;
+    state.friends.forEach((f) => {
+        const el = document.createElement("div");
+        el.className = "item";
         el.innerHTML = `<b>${escapeHtml(f.nickname)}</b><small>@${escapeHtml(f.username)} #${f.id}</small>`;
         const actions = document.createElement("div");
         actions.className = "actions";
@@ -395,6 +712,40 @@ const state = {
     const list = qs("friendRequests");
     if (!list) return;
     list.innerHTML = "";
+    rows.forEach((r) => {
+        const el = document.createElement("div");
+        el.className = "item";
+        el.innerHTML = `
+            <div class="item-head">
+                ${avatarMarkup({ avatar: r.avatar, label: r.nickname, seed: `request-${r.user_id || r.id}`, className: "avatar-md" })}
+                <div class="item-copy">
+                    <b>${escapeHtml(r.nickname)}</b>
+                    <small>@${escapeHtml(r.username)}</small>
+                    <p class="item-preview">Хочет добавить вас в друзья.</p>
+                </div>
+            </div>
+        `;
+        const actions = document.createElement("div");
+        actions.className = "actions";
+        const yes = document.createElement("button");
+        yes.textContent = "Принять";
+        yes.onclick = async () => {
+            await api(`/api/friends/request/${r.id}/accept`, { method: "POST", body: "{}" });
+            await refreshSide();
+        };
+        const no = document.createElement("button");
+        no.className = "danger";
+        no.textContent = "Отклонить";
+        no.onclick = async () => {
+            await api(`/api/friends/request/${r.id}/reject`, { method: "POST", body: "{}" });
+            await refreshSide();
+        };
+        actions.appendChild(yes);
+        actions.appendChild(no);
+        el.appendChild(actions);
+        list.appendChild(el);
+    });
+    return;
     rows.forEach((r) => {
         const el = document.createElement("div");
         el.className = "item";
@@ -429,6 +780,40 @@ const state = {
     rows.forEach((r) => {
         const el = document.createElement("div");
         el.className = "item";
+        el.innerHTML = `
+            <div class="item-head">
+                ${avatarMarkup({ label: r.chat_title || "Группа", seed: `invite-${r.chat_id || r.id}`, className: "avatar-md" })}
+                <div class="item-copy">
+                    <b>${escapeHtml(r.chat_title || "Группа")}</b>
+                    <small>от ${escapeHtml(r.inviter_nickname)} @${escapeHtml(r.inviter_username)}</small>
+                    <p class="item-preview">Вас приглашают в групповой чат.</p>
+                </div>
+            </div>
+        `;
+        const actions = document.createElement("div");
+        actions.className = "actions";
+        const yes = document.createElement("button");
+        yes.textContent = "Принять";
+        yes.onclick = async () => {
+            await api(`/api/groups/invites/${r.id}/accept`, { method: "POST", body: "{}" });
+            await Promise.all([loadGroupInvites(), loadChats()]);
+        };
+        const no = document.createElement("button");
+        no.className = "danger";
+        no.textContent = "Отклонить";
+        no.onclick = async () => {
+            await api(`/api/groups/invites/${r.id}/reject`, { method: "POST", body: "{}" });
+            await loadGroupInvites();
+        };
+        actions.appendChild(yes);
+        actions.appendChild(no);
+        el.appendChild(actions);
+        list.appendChild(el);
+    });
+    return;
+    rows.forEach((r) => {
+        const el = document.createElement("div");
+        el.className = "item";
         el.innerHTML = `<b>${escapeHtml(r.chat_title || "Группа")}</b><small>от ${escapeHtml(r.inviter_nickname)} @${escapeHtml(r.inviter_username)}</small>`;
         const actions = document.createElement("div");
         actions.className = "actions";
@@ -457,6 +842,32 @@ const state = {
     const list = qs("blockedList");
     if (!list) return;
     list.innerHTML = "";
+    rows.forEach((u) => {
+        const el = document.createElement("div");
+        el.className = "item";
+        el.innerHTML = `
+            <div class="item-head">
+                ${avatarMarkup({ avatar: u.avatar, label: u.nickname, seed: `blocked-${u.id}`, className: "avatar-sm" })}
+                <div class="item-copy">
+                    <b>${escapeHtml(u.nickname)}</b>
+                    <small>@${escapeHtml(u.username)} #${u.id}</small>
+                </div>
+            </div>
+        `;
+        const actions = document.createElement("div");
+        actions.className = "actions";
+        const un = document.createElement("button");
+        un.textContent = "Разблокировать";
+        un.onclick = async () => {
+            await api(`/api/users/${u.id}/block`, { method: "DELETE" });
+            await loadBlockedList();
+            await refreshSide();
+        };
+        actions.appendChild(un);
+        el.appendChild(actions);
+        list.appendChild(el);
+    });
+    return;
     rows.forEach((u) => {
         const el = document.createElement("div");
         el.className = "item";
@@ -511,6 +922,45 @@ const state = {
     const list = qs("assetsList");
     if (!list) return;
     list.innerHTML = "";
+    state.assets.forEach((a) => {
+        const el = document.createElement("div");
+        const preview = a.kind === "emoji" || a.kind === "sticker"
+            ? `<img class="avatar avatar-md" src="${withMediaToken(a.file_url)}" alt="${escapeHtml(a.title || a.kind)}" loading="lazy">`
+            : avatarMarkup({ label: a.kind, seed: `asset-${a.id}`, className: "avatar-md" });
+        el.className = "item";
+        el.innerHTML = `
+            <div class="item-head">
+                ${preview}
+                <div class="item-copy">
+                    <div class="item-title-row">
+                        <b>${escapeHtml(a.title || a.kind)}</b>
+                        <span class="item-tag">${escapeHtml(a.kind)}</span>
+                    </div>
+                    <small>Персональный набор</small>
+                </div>
+            </div>
+        `;
+        const actions = document.createElement("div");
+        actions.className = "actions";
+        const send = document.createElement("button");
+        send.textContent = "Отправить";
+        send.onclick = async () => {
+            await sendAssetMessage(a.id);
+            qs("assetsDialog")?.close();
+        };
+        const del = document.createElement("button");
+        del.className = "danger";
+        del.textContent = "Удалить";
+        del.onclick = async () => {
+            await api(`/api/assets/${a.id}`, { method: "DELETE" });
+            await loadAssets();
+        };
+        actions.appendChild(send);
+        actions.appendChild(del);
+        el.appendChild(actions);
+        list.appendChild(el);
+    });
+    return;
     state.assets.forEach((a) => {
         const el = document.createElement("div");
         el.className = "item";
@@ -1517,6 +1967,7 @@ const state = {
   function bindUi() {
     setMainTab("chats");
     setChatOpen(false);
+    setEmptyState(true);
     const gateCode = qs("gateCode");
     if (gateCode) gateCode.value = localStorage.getItem("saved_gate_code") || "";
     const tabChats = qs("tabChats");
@@ -1815,6 +2266,40 @@ const state = {
         users.forEach((u) => {
             const el = document.createElement("div");
             el.className = "item";
+            el.innerHTML = `
+                <div class="item-head">
+                    ${avatarMarkup({ avatar: u.avatar, label: u.nickname, seed: `search-${u.id}`, className: "avatar-md" })}
+                    <div class="item-copy">
+                        <div class="item-title-row">
+                            <b>${escapeHtml(u.nickname)}</b>
+                            <span class="item-tag">User</span>
+                        </div>
+                        <small>@${escapeHtml(u.username)} #${u.id}</small>
+                        ${u.about ? `<p class="item-preview">${escapeHtml(truncateText(u.about, 90))}</p>` : ""}
+                    </div>
+                </div>
+            `;
+            const actions = document.createElement("div");
+            actions.className = "actions";
+            const add = document.createElement("button");
+            add.textContent = "В друзья";
+            add.onclick = () => api("/api/friends/request", { method: "POST", body: JSON.stringify({ username: u.username }) });
+            const block = document.createElement("button");
+            block.className = "danger";
+            block.textContent = "Блок";
+            block.onclick = async () => {
+                await api(`/api/users/${u.id}/block`, { method: "POST", body: "{}" });
+                await refreshSide();
+            };
+            actions.appendChild(add);
+            actions.appendChild(block);
+            el.appendChild(actions);
+            out.appendChild(el);
+        });
+        return;
+        users.forEach((u) => {
+            const el = document.createElement("div");
+            el.className = "item";
             el.innerHTML = `<b>${escapeHtml(u.nickname)}</b><small>@${escapeHtml(u.username)} #${u.id}</small>`;
             const actions = document.createElement("div");
             actions.className = "actions";
@@ -1944,6 +2429,7 @@ const state = {
     if (window.__lanMessengerBooted) return;
     window.__lanMessengerBooted = true;
   
+    installResponsiveEnvironment();
     bindUi();
     const gate = await api("/api/gate/status");
     const sessionOk = await ensureSession();
