@@ -7,76 +7,35 @@
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <title>LAN Messenger</title>
-    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="/static/style.css?v=20260320b">
     <meta http-equiv="Permissions-Policy" content="camera=(self), microphone=(self), display-capture=(self)">
 </head>
 <body>
-    <div id="gateScreen" class="screen">
-        <div class="auth-shell">
-            <section class="panel auth-showcase glass">
-                <div class="brand-mark">LM</div>
-                <p class="eyebrow">Secure LAN Messenger</p>
-                <h1>Интерфейс в духе Telegram и Discord</h1>
-                <p class="auth-copy">
-                    Быстрый чат для локальной сети с аккуратной адаптацией под Windows-браузеры,
-                    Android и iOS Safari.
-                </p>
-                <div class="auth-points">
-                    <span>Личные чаты</span>
-                    <span>Группы и звонки</span>
-                    <span>Файлы, голос, кружки</span>
-                    <span>Оптимизировано под touch и мышь</span>
-                </div>
-            </section>
+    <div id="authScreen" class="screen">
+        <div class="panel auth-panel auth-panel-compact glass">
+            <div class="auth-mini-brand">
+                <div class="brand-mark small">LM</div>
+            </div>
 
-            <section class="panel auth-panel glass">
-                <p class="eyebrow">Доступ</p>
-                <h2>Вход в пространство</h2>
-                <p class="auth-copy">Введите код доступа, чтобы открыть мессенджер.</p>
-                <input type="password" id="gateCode" placeholder="Введите код">
-                <label class="toggle-row" for="rememberCode">
-                    <input type="checkbox" id="rememberCode">
-                    <span>Запомнить код на этом устройстве</span>
-                </label>
-                <button id="gateBtn">Продолжить</button>
-                <div id="gateError" class="error"></div>
-            </section>
-        </div>
-    </div>
+            <div class="tabs">
+                <button id="tabLogin" class="tab active">Вход</button>
+                <button id="tabRegister" class="tab">Регистрация</button>
+            </div>
 
-    <div id="authScreen" class="screen hidden">
-        <div class="auth-shell compact">
-            <section class="panel auth-showcase glass">
-                <div class="brand-mark">LM</div>
-                <p class="eyebrow">Вход и регистрация</p>
-                <h1>Откройте свой профиль</h1>
-                <p class="auth-copy">
-                    Всё готово для desktop и mobile: крупные контролы, удобная навигация,
-                    безопасные зоны и чистая иерархия интерфейса.
-                </p>
-            </section>
+            <div id="loginPane">
+                <input type="text" id="loginUsername" placeholder="Username" autocapitalize="none">
+                <input type="password" id="loginPassword" placeholder="Пароль">
+                <button id="loginBtn">🔐 Войти</button>
+            </div>
 
-            <section class="panel auth-panel glass">
-                <div class="tabs">
-                    <button id="tabLogin" class="tab active">Вход</button>
-                    <button id="tabRegister" class="tab">Регистрация</button>
-                </div>
+            <div id="registerPane" class="hidden">
+                <input type="text" id="regUsername" placeholder="Username" autocapitalize="none">
+                <input type="password" id="regPassword" placeholder="Пароль">
+                <input type="text" id="regNickname" placeholder="Ник">
+                <button id="registerBtn">✨ Создать</button>
+            </div>
 
-                <div id="loginPane">
-                    <input type="text" id="loginUsername" placeholder="Username" autocapitalize="none">
-                    <input type="password" id="loginPassword" placeholder="Пароль">
-                    <button id="loginBtn">Войти</button>
-                </div>
-
-                <div id="registerPane" class="hidden">
-                    <input type="text" id="regUsername" placeholder="Username" autocapitalize="none">
-                    <input type="password" id="regPassword" placeholder="Пароль">
-                    <input type="text" id="regNickname" placeholder="Ник">
-                    <button id="registerBtn">Создать аккаунт</button>
-                </div>
-
-                <div id="authError" class="error"></div>
-            </section>
+            <div id="authError" class="error"></div>
         </div>
     </div>
 
@@ -92,7 +51,7 @@
                     <span class="quick-glyph">💬</span>
                     <span class="quick-label">Чаты</span>
                 </button>
-                <button id="tabRequests" class="quick" aria-label="Заявки">
+                <button id="tabRequests" class="quick" aria-label="Запросы">
                     <span class="quick-glyph">📥</span>
                     <span class="quick-label">Запросы</span>
                 </button>
@@ -112,9 +71,9 @@
                 <div class="profile-mini" id="profileMini"></div>
 
                 <div class="sidebar-actions">
-                    <button id="btnCopyMyId" class="ghost">Мой ID</button>
-                    <button id="btnProfile">Профиль</button>
-                    <button id="btnSettings">Настройки</button>
+                    <button id="btnCopyMyId" class="ghost" title="Скопировать ID">🆔</button>
+                    <button id="btnProfile" title="Профиль">👤</button>
+                    <button id="btnSettings" title="Настройки">⚙️</button>
                 </div>
             </div>
 
@@ -125,13 +84,13 @@
                         <h3>Чаты</h3>
                     </div>
                     <div class="row pane-actions">
-                        <button id="btnGroup">Новая группа</button>
-                        <button id="btnFriends">Обновить</button>
+                        <button id="btnGroup" title="Новая группа">👥+</button>
+                        <button id="btnFriends" title="Обновить">🔄</button>
                     </div>
                 </div>
 
                 <div class="search-wrap">
-                    <input type="text" id="chatSearch" placeholder="Поиск чатов...">
+                    <input type="text" id="chatSearch" placeholder="Поиск...">
                 </div>
 
                 <div id="chatList" class="list chat-list"></div>
@@ -141,17 +100,17 @@
                 <div class="pane-header">
                     <div>
                         <p class="eyebrow">Уведомления</p>
-                        <h3>Заявки и инвайты</h3>
+                        <h3>Запросы</h3>
                     </div>
                 </div>
 
                 <div class="section-block">
-                    <div class="section-title">Заявки в друзья</div>
+                    <div class="section-title">В друзья</div>
                     <div id="friendRequests" class="list"></div>
                 </div>
 
                 <div class="section-block">
-                    <div class="section-title">Инвайты в группы</div>
+                    <div class="section-title">В группы</div>
                     <div id="groupInvites" class="list compact"></div>
                 </div>
             </div>
@@ -160,12 +119,12 @@
                 <div class="pane-header">
                     <div>
                         <p class="eyebrow">Поиск</p>
-                        <h3>Найти пользователя</h3>
+                        <h3>Люди</h3>
                     </div>
                 </div>
 
                 <div class="search-wrap">
-                    <input type="text" id="userSearch" placeholder="Username или ник...">
+                    <input type="text" id="userSearch" placeholder="Username или ник">
                 </div>
 
                 <div id="userResults" class="list"></div>
@@ -180,29 +139,29 @@
                 </div>
 
                 <div id="friendsList" class="list"></div>
-                <button id="btnLogout" class="danger logout-button">Выйти из аккаунта</button>
+                <button id="btnLogout" class="danger logout-button">🚪 Выйти</button>
             </div>
         </aside>
 
         <main class="chat-area panel glass">
             <div class="chat-header">
                 <div class="chat-header-main">
-                    <button id="btnBackToList" class="ghost hidden">← Назад</button>
+                    <button id="btnBackToList" class="ghost hidden" title="Назад">←</button>
                     <div id="chatAvatar" class="chat-avatar">
                         <div class="avatar avatar-xl avatar-placeholder">LM</div>
                     </div>
                     <div class="chat-heading">
                         <h3 id="chatTitle">Выберите чат</h3>
-                        <p id="chatMeta" class="chat-meta">Откройте диалог слева или создайте новую группу.</p>
+                        <p id="chatMeta" class="chat-meta">Откройте диалог слева или создайте группу.</p>
                     </div>
                 </div>
 
                 <div class="chat-controls">
-                    <button id="btnMobileMenu" class="mobile-only ghost">Разделы</button>
-                    <button id="btnCallStart">📞 Звонок</button>
-                    <button id="btnInviteGroup" class="hidden">👤+ Инвайт</button>
-                    <button id="btnLeaveChat" class="danger hidden">Выйти</button>
-                    <button id="btnDeleteGroup" class="danger hidden">Удалить</button>
+                    <button id="btnMobileMenu" class="mobile-only ghost" title="Разделы">📚</button>
+                    <button id="btnCallStart" title="Звонок">📞</button>
+                    <button id="btnInviteGroup" class="hidden" title="Пригласить">➕</button>
+                    <button id="btnLeaveChat" class="danger hidden" title="Выйти">🚪</button>
+                    <button id="btnDeleteGroup" class="danger hidden" title="Удалить">🗑️</button>
                 </div>
             </div>
 
@@ -220,10 +179,7 @@
                         <div class="chat-empty-card">
                             <div class="brand-mark mid">LM</div>
                             <h3>Выберите чат</h3>
-                            <p>
-                                Слева доступны диалоги, друзья, поиск пользователей и запросы.
-                                Интерфейс уже подготовлен под desktop, Android и iOS Safari.
-                            </p>
+                            <p>Список диалогов, группы, поиск и друзья находятся слева.</p>
                         </div>
                     </div>
                     <div class="messages" id="messages"></div>
@@ -231,13 +187,13 @@
             </div>
 
             <div class="composer">
-                <textarea id="messageInput" placeholder="Напишите сообщение..."></textarea>
+                <textarea id="messageInput" placeholder="Сообщение..."></textarea>
                 <div class="composer-actions">
-                    <button id="btnAssets">😀 Эмодзи</button>
-                    <button id="btnFile">📎 Файл</button>
-                    <button id="btnVoice">🎤 Голос</button>
-                    <button id="btnCircle">📹 Кружок</button>
-                    <button id="sendBtn">➤ Отправить</button>
+                    <button id="btnAssets" title="Эмодзи и стикеры">😀</button>
+                    <button id="btnFile" title="Файл">📎</button>
+                    <button id="btnVoice" title="Голос">🎤</button>
+                    <button id="btnCircle" title="Кружок">📹</button>
+                    <button id="sendBtn" title="Отправить">➤</button>
                 </div>
                 <input type="file" id="fileInput" class="hidden">
             </div>
@@ -247,18 +203,19 @@
     <div id="callOverlay" class="call-overlay hidden">
         <div class="call-shell">
             <div class="call-top">
-                <h3 id="callTitleText">Звонок <span id="callTimer">00:00</span></h3>
-                <button id="btnMinimizeCall" class="ghost">Свернуть ↙</button>
+                <h3 id="callTitleText"><span id="callTitleLabel">Звонок</span> <span id="callTimer">00:00</span></h3>
+                <button id="btnMinimizeCall" class="ghost" title="Свернуть">↙</button>
             </div>
 
             <div id="callGrid" class="call-grid"></div>
 
             <div class="call-actions">
-                <button id="btnToggleMic">🎤 Микр: ВКЛ</button>
-                <button id="btnToggleCam">📹 Камера: ВЫКЛ</button>
-                <button id="btnShareScreen">💻 Демонстрация</button>
-                <button id="btnDevices">⚙️ Устройства</button>
-                <button id="btnLeaveCall" class="danger">Завершить</button>
+                <button id="btnToggleMic" title="Микрофон">🎤</button>
+                <button id="btnToggleCam" title="Камера">📷</button>
+                <button id="btnRotateCam" title="Сменить камеру">🔄</button>
+                <button id="btnShareScreen" title="Экран">🪟</button>
+                <button id="btnDevices" title="Устройства">🎧</button>
+                <button id="btnLeaveCall" class="danger" title="Завершить">❌</button>
             </div>
 
             <div id="devicePanel" class="device-panel hidden">
@@ -266,8 +223,8 @@
                 <select id="selCam"></select>
                 <select id="selSpeaker"></select>
                 <select id="selAudioMode">
-                    <option value="speaker">Спикер (Громкая связь)</option>
-                    <option value="phone">Телефон (Ухо)</option>
+                    <option value="speaker">Спикер</option>
+                    <option value="phone">Телефон</option>
                 </select>
             </div>
         </div>
@@ -276,12 +233,12 @@
     <div id="incomingCallToast" class="incoming hidden">
         <h3 id="incomingCallText">Входящий звонок</h3>
         <div class="dialog-actions">
-            <button id="btnIncomingAccept" class="success">Принять</button>
-            <button id="btnIncomingDecline" class="danger">Отклонить</button>
+            <button id="btnIncomingAccept" class="success">✅</button>
+            <button id="btnIncomingDecline" class="danger">❌</button>
         </div>
     </div>
 
-    <button id="btnCallRestore" class="floating-call hidden">📞 Вернуться в звонок</button>
+    <button id="btnCallRestore" class="floating-call hidden">📞</button>
 
     <dialog id="profileDialog">
         <h3>Профиль</h3>
@@ -290,23 +247,23 @@
         <p class="small">Аватар</p>
         <input type="file" id="profileAvatar" accept="image/*">
         <div class="dialog-actions">
-            <button id="profileSave">Сохранить</button>
-            <button id="profileClose" class="ghost">Закрыть</button>
+            <button id="profileSave">💾</button>
+            <button id="profileClose" class="ghost">✖</button>
         </div>
     </dialog>
 
     <dialog id="groupDialog">
         <h3>Новая группа</h3>
         <input type="text" id="groupTitle" placeholder="Название">
-        <input type="text" id="groupMembers" placeholder="ID друзей через запятую, например: 12, 45">
+        <input type="text" id="groupMembers" placeholder="@username, @username">
         <div class="dialog-actions">
-            <button id="groupCreate">Создать</button>
-            <button id="groupClose" class="ghost">Отмена</button>
+            <button id="groupCreate">👥+</button>
+            <button id="groupClose" class="ghost">✖</button>
         </div>
     </dialog>
 
     <dialog id="settingsDialog">
-        <h3>Приватность и настройки</h3>
+        <h3>Настройки</h3>
         <label class="small">Заявки в друзья</label>
         <select id="setFriendReq">
             <option value="everyone">Все</option>
@@ -332,36 +289,36 @@
             <option value="nobody">Никто</option>
         </select>
 
-        <h4>Смена пароля</h4>
+        <h4>Пароль</h4>
         <input type="password" id="oldPassword" placeholder="Старый пароль">
         <input type="password" id="newPassword" placeholder="Новый пароль">
-        <button id="btnChangePassword" class="ghost dialog-inline">Сменить пароль</button>
+        <button id="btnChangePassword" class="ghost dialog-inline">🔐</button>
 
         <h4>Заблокированные</h4>
         <div id="blockedList" class="list compact"></div>
 
         <div class="dialog-actions">
-            <button id="settingsSave">Сохранить</button>
-            <button id="btnDeleteAccount" class="danger">Удалить аккаунт</button>
-            <button id="settingsClose" class="ghost">Закрыть</button>
+            <button id="settingsSave">💾</button>
+            <button id="btnDeleteAccount" class="danger">🗑️</button>
+            <button id="settingsClose" class="ghost">✖</button>
         </div>
     </dialog>
 
     <dialog id="assetsDialog">
-        <h3>Мои стикеры</h3>
+        <h3>Стикеры</h3>
         <select id="assetKind">
             <option value="emoji">Emoji</option>
             <option value="sticker">Sticker</option>
         </select>
         <input type="text" id="assetTitle" placeholder="Название">
         <input type="file" id="assetFile" accept="image/*,video/*">
-        <button id="btnUploadAsset" class="ghost dialog-inline">Загрузить</button>
+        <button id="btnUploadAsset" class="ghost dialog-inline">⬆️</button>
         <div id="assetsList" class="list"></div>
         <div class="dialog-actions">
-            <button id="assetsClose" class="ghost">Закрыть</button>
+            <button id="assetsClose" class="ghost">✖</button>
         </div>
     </dialog>
 
-    <script src="/static/app.js"></script>
+    <script src="/static/app.js?v=20260320b"></script>
 </body>
 </html>

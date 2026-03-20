@@ -21,6 +21,7 @@ const state = {
         localStream: null,
         peers: new Map(),
         tiles: new Map(),
+        remoteStreams: new Map(),
         iceServers: null,
     },
     wsMeta: {
@@ -35,6 +36,7 @@ const state = {
         camId: "",
         speakerId: "",
         audioMode: "speaker",
+        camFacing: "user",
     },
     assets: [],
     ui: {
@@ -49,6 +51,7 @@ const state = {
   const isLikelyAndroid = /Android/.test(navigator.userAgent);
   const isMobile = isLikelyIOS || isLikelyAndroid;
   const isLikelySafari = /^((?!chrome|android|crios|fxios).)*safari/i.test(navigator.userAgent);
+  const isLocalDevHost = ["localhost", "127.0.0.1", "[::1]"].includes(location.hostname);
   
   function qs(id) {
     return document.getElementById(id);
@@ -260,6 +263,16 @@ const state = {
     return labels[role] || role || "Участник";
   }
   
+  function roleBadge(role) {
+    if (role === "owner") return "👑 Владелец";
+    if (role === "admin") return "🛡️ Админ";
+    return "🙂 Участник";
+  }
+  
+  function myGroupRole() {
+    return state.membersById.get(state.me?.id)?.role || "member";
+  }
+  
   function chatTitleText(chat) {
     return chat ? (chat.title || chat.peer?.nickname || "Чат") : "Выберите чат";
   }
@@ -267,7 +280,7 @@ const state = {
   function chatMetaText(chat) {
     if (!chat) return "Откройте диалог слева или создайте новую группу.";
     if (chat.type === "group") {
-        const count = state.membersById.size;
+        const count = state.membersById.size || chat.member_count || 0;
         return count ? `${count} участников` : "Групповой чат";
     }
     if (chat.peer?.username) {
@@ -460,7 +473,6 @@ const state = {
   }
   
   function setChatHeader(chat) {
-    const title = chat ? escapeHtml(chat.title || chat.peer?.nickname || "Чат") : "Выберите чат";
     const titleEl = qs("chatTitle");
     const titleText = chatTitleText(chat);
     const metaEl = qs("chatMeta");
@@ -489,38 +501,22 @@ const state = {
     }
     if (canCall) show(btnCall); else hide(btnCall);
     if (group) show(btnInvite); else hide(btnInvite);
+    if (btnInvite) btnInvite.title = group ? "Пригласить по username" : "Пригласить";
     if (chat) show(btnLeave); else hide(btnLeave);
-    if (btnLeave) btnLeave.textContent = group ? "Выйти из группы" : "Выйти из чата";
+    if (btnLeave) {
+        btnLeave.textContent = "🚪";
+        btnLeave.title = group ? "Выйти из группы" : "Выйти из чата";
+    }
     if (canDelete) show(btnDelete); else hide(btnDelete);
+    if (btnDelete) {
+        btnDelete.textContent = "🗑️";
+        btnDelete.title = "Удалить группу";
+    }
     if (group) show(membersPanel); else hide(membersPanel);
     if (stack) stack.classList.toggle("has-members", group);
     setEmptyState(!chat);
-    const screenBtn = qs("btnShareScreen");
-    if (screenBtn) {
-        if (isMobile || !(navigator.mediaDevices && "getDisplayMedia" in navigator.mediaDevices)) {
-            hide(screenBtn);
-            screenBtn.title = "Демонстрация экрана недоступна на мобильных устройствах";
-        } else {
-            show(screenBtn);
-        }
-    }
-    return;
-    if (btnLeave) btnLeave.textContent = group ? "Выйти из группы" : "Выйти из чата";
-    if (canDelete) show(btnDelete); else hide(btnDelete);
-    if (group) show(membersPanel); else hide(membersPanel);
-    if (stack) stack.classList.toggle("has-members", group);
-    
-    const btnScreen = qs("btnShareScreen");
-    if (btnScreen) {
-        if (isMobile || !('getDisplayMedia' in navigator.mediaDevices)) {
-            hide(btnScreen);
-            btnScreen.title = "Демонстрация экрана не поддерживается на мобильных устройствах";
-        } else {
-            show(btnScreen);
-        }
-    }
   }
-  
+
   async function loadMembers(chatId) {
     if (!chatId) return;
     const members = await api(`/api/chats/${chatId}/members`);
@@ -528,6 +524,7 @@ const state = {
     const wrap = qs("chatMembers");
     if (!wrap) return;
     wrap.innerHTML = "";
+    const currentRole = myGroupRole();
     members.forEach((m) => {
         const el = document.createElement("div");
         el.className = "item";
@@ -537,7 +534,7 @@ const state = {
                 <div class="item-copy">
                     <div class="item-title-row">
                         <b>${escapeHtml(m.nickname)}</b>
-                        <span class="item-tag">${escapeHtml(describeMemberRole(m.role))}</span>
+                        <span class="item-tag">${escapeHtml(roleBadge(m.role))}</span>
                     </div>
                     <small>@${escapeHtml(m.username)} #${m.id}</small>
                 </div>
@@ -564,6 +561,79 @@ const state = {
         };
         actions.appendChild(dm);
         actions.appendChild(call);
+        actions.innerHTML = "";
+        if (m.id !== state.me.id) {
+            const dm = document.createElement("button");
+            dm.textContent = "💬";
+            dm.title = "Личный чат";
+            dm.onclick = async () => {
+                const out = await api("/api/chats/direct", { method: "POST", body: JSON.stringify({ user_id: m.id }) });
+                await loadChats();
+                await openChat(out.chat_id);
+            };
+            const call = document.createElement("button");
+            call.textContent = "📞";
+            call.title = "Позвонить";
+            call.onclick = async () => {
+                const out = await api("/api/chats/direct", { method: "POST", body: JSON.stringify({ user_id: m.id }) });
+                await loadChats();
+                await openChat(out.chat_id);
+                await startCall();
+            };
+            actions.appendChild(dm);
+            actions.appendChild(call);
+        }
+        if (currentRole === "owner" && m.id !== state.me.id) {
+            const promote = document.createElement("button");
+            promote.className = "ghost";
+            promote.textContent = m.role === "admin" ? "🙂" : "🛡️";
+            promote.title = m.role === "admin" ? "Сделать участником" : "Выдать админку";
+            promote.onclick = async () => {
+                try {
+                    await api(`/api/groups/${chatId}/members/${m.id}/role`, {
+                        method: "POST",
+                        body: JSON.stringify({ role: m.role === "admin" ? "member" : "admin" }),
+                    });
+                    await Promise.all([loadMembers(chatId), loadChats()]);
+                } catch (e) {
+                    alert(e.message);
+                }
+            };
+            actions.appendChild(promote);
+            const transfer = document.createElement("button");
+            transfer.className = "ghost";
+            transfer.textContent = "👑";
+            transfer.title = "Передать owner";
+            transfer.onclick = async () => {
+                if (!confirm(`Передать роль owner пользователю @${m.username}?`)) return;
+                try {
+                    await api(`/api/groups/${chatId}/members/${m.id}/role`, {
+                        method: "POST",
+                        body: JSON.stringify({ role: "owner" }),
+                    });
+                    await Promise.all([loadMembers(chatId), loadChats()]);
+                } catch (e) {
+                    alert(e.message);
+                }
+            };
+            actions.appendChild(transfer);
+        }
+        if ((currentRole === "owner" && m.id !== state.me.id) || (currentRole === "admin" && m.role === "member" && m.id !== state.me.id)) {
+            const kick = document.createElement("button");
+            kick.className = "danger";
+            kick.textContent = "⛔";
+            kick.title = "Исключить из группы";
+            kick.onclick = async () => {
+                if (!confirm(`Исключить @${m.username} из группы?`)) return;
+                try {
+                    await api(`/api/groups/${chatId}/members/${m.id}`, { method: "DELETE" });
+                    await Promise.all([loadMembers(chatId), loadChats()]);
+                } catch (e) {
+                    alert(e.message);
+                }
+            };
+            actions.appendChild(kick);
+        }
         el.appendChild(actions);
         wrap.appendChild(el);
     });
@@ -1051,11 +1121,35 @@ const state = {
     const btnMic = qs("btnToggleMic");
     const btnCam = qs("btnToggleCam");
     const btnScreen = qs("btnShareScreen");
-    if (btnMic) btnMic.textContent = `Микрофон: ${state.call.mic ? "вкл" : "выкл"}`;
-    if (btnCam) btnCam.textContent = `Камера: ${state.call.cam ? "вкл" : "выкл"}`;
-    if (btnScreen) btnScreen.textContent = `Демонстрация: ${state.call.screen ? "вкл" : "выкл"}`;
+    const btnRotate = qs("btnRotateCam");
+    const btnDevices = qs("btnDevices");
+    if (btnMic) {
+        btnMic.textContent = state.call.mic ? "🎤" : "🔇";
+        btnMic.title = state.call.mic ? "Выключить микрофон" : "Включить микрофон";
+    }
+    if (btnCam) {
+        btnCam.textContent = state.call.cam ? (state.call.screen ? "🖥️" : "📷") : "🚫";
+        btnCam.title = state.call.cam ? "Выключить камеру" : "Включить камеру";
+    }
+    if (btnScreen) {
+        const canShareScreen = !isMobile && !!(navigator.mediaDevices && "getDisplayMedia" in navigator.mediaDevices);
+        btnScreen.textContent = state.call.screen ? "🖥️" : "🪟";
+        btnScreen.title = state.call.screen ? "Остановить демонстрацию" : "Поделиться экраном";
+        btnScreen.disabled = !canShareScreen;
+        if (canShareScreen) show(btnScreen); else hide(btnScreen);
+    }
+    if (btnRotate) {
+        btnRotate.textContent = "🔄";
+        btnRotate.title = "Сменить камеру";
+        btnRotate.disabled = !state.call.active || state.call.screen;
+        if (state.call.active) show(btnRotate); else hide(btnRotate);
+    }
+    if (btnDevices) {
+        btnDevices.textContent = "🎧";
+        btnDevices.title = "Устройства и звук";
+    }
   }
-  
+
   function updateCallTimer() {
     if (!state.call.startedAt) {
         const el = qs("callTimer");
@@ -1093,7 +1187,7 @@ const state = {
     rogueTiles.forEach(t => t.remove());
   
     const tile = document.createElement("div");
-    tile.className = "call-tile";
+    tile.className = `call-tile ${isLocal ? "local" : ""}`;
     tile.dataset.uid = userId;
     
     const video = document.createElement("video");
@@ -1102,6 +1196,7 @@ const state = {
     video.setAttribute("playsinline", "");
     video.setAttribute("webkit-playsinline", "");
     video.muted = isLocal;
+    video.style.transform = isLocal ? "scaleX(-1)" : "none";
     
     const who = document.createElement("div");
     who.className = "who";
@@ -1153,6 +1248,7 @@ const state = {
     const pc = state.call.peers.get(userId);
     if (pc) pc.close();
     state.call.peers.delete(userId);
+    state.call.remoteStreams.delete(userId);
     const card = state.call.tiles.get(userId);
     if (card) card.tile.remove();
     state.call.tiles.delete(userId);
@@ -1274,8 +1370,7 @@ const state = {
         });
         state.call.localStream.addTrack(track);
         for (const pc of state.call.peers.values()) {
-            const senders = pc.getSenders();
-            const audioSender = senders.find((s) => s.track && s.track.kind === "audio");
+            const audioSender = getPeerSender(pc, "audio");
             if (audioSender) {
                 await audioSender.replaceTrack(track);
             }
@@ -1290,7 +1385,7 @@ const state = {
     if (!state.call.active || !state.call.cam) return;
     try {
         const stream = await navigator.mediaDevices.getUserMedia({
-            video: state.devicePrefs.camId ? { deviceId: { exact: state.devicePrefs.camId } } : true,
+            video: getRequestedVideoConstraints(),
             audio: false,
         });
         const track = stream.getVideoTracks()[0];
@@ -1301,8 +1396,7 @@ const state = {
         });
         state.call.localStream.addTrack(track);
         for (const pc of state.call.peers.values()) {
-            const senders = pc.getSenders();
-            const videoSender = senders.find((s) => s.track && s.track.kind === "video");
+            const videoSender = getPeerSender(pc, "video");
             if (videoSender) {
                 await videoSender.replaceTrack(track);
             }
@@ -1312,13 +1406,36 @@ const state = {
             localCard.video.srcObject = new MediaStream(state.call.localStream.getTracks());
             await safePlay(localCard.video);
         }
+        await renegotiateAllPeers();
+        updateCallButtons();
     } catch (e) {
         console.error("Failed to switch cam:", e);
+    }
+  }
+
+  async function rotateCamera() {
+    const { cams } = await listMediaDevices();
+    if (cams.length > 1) {
+        const currentIndex = Math.max(0, cams.findIndex((cam) => cam.deviceId === state.devicePrefs.camId));
+        const nextCam = cams[(currentIndex + 1) % cams.length];
+        state.devicePrefs.camId = nextCam?.deviceId || "";
+    } else {
+        state.devicePrefs.camId = "";
+        state.devicePrefs.camFacing = state.devicePrefs.camFacing === "environment" ? "user" : "environment";
+    }
+    if (state.call.active && state.call.cam && !state.call.screen) {
+        await switchCamDevice(state.devicePrefs.camId);
     }
   }
   
   async function applyAudioMode(mode) {
     state.devicePrefs.audioMode = mode || "speaker";
+    const audioSession = navigator.audioSession;
+    if (audioSession && typeof audioSession === "object" && "type" in audioSession) {
+        try {
+            audioSession.type = state.devicePrefs.audioMode === "phone" ? "play-and-record" : "playback";
+        } catch (_) {}
+    }
     if (!state.call.active) return;
     if (isLikelyIOS && isLikelySafari && !("setSinkId" in HTMLMediaElement.prototype)) {
         await applySpeakerToAllTiles();
@@ -1339,26 +1456,102 @@ const state = {
     }
     await applySpeakerToAllTiles();
   }
-  
+
   // === ИСПРАВЛЕННАЯ ФУНКЦИЯ (ИДЕАЛЬНЫЙ ПАТТЕРН ПЕРЕГОВОРОВ) ===
+  function getPeerSender(pc, kind) {
+    if (!pc) return null;
+    const cached = kind === "audio" ? pc._audioSender : pc._videoSender;
+    if (cached) return cached;
+    const fallback = pc.getSenders().find((sender) => sender.track?.kind === kind) || null;
+    if (kind === "audio") pc._audioSender = fallback;
+    if (kind === "video") pc._videoSender = fallback;
+    return fallback;
+  }
+
+  async function renegotiatePeer(userId) {
+    const uid = Number(userId);
+    const pc = state.call.peers.get(uid);
+    if (!pc || pc.signalingState !== "stable" || pc._makingOffer) return;
+    try {
+        pc._makingOffer = true;
+        const offer = await pc.createOffer({
+            offerToReceiveAudio: true,
+            offerToReceiveVideo: true,
+        });
+        await pc.setLocalDescription(offer);
+        if (state.ws && state.ws.readyState === WebSocket.OPEN) {
+            state.ws.send(JSON.stringify({
+                type: "call:signal",
+                chat_id: state.call.chatId,
+                to_user: uid,
+                signal: { type: "offer", sdp: pc.localDescription },
+            }));
+        }
+    } catch (e) {
+        console.error("Renegotiation failed:", e);
+    } finally {
+        pc._makingOffer = false;
+    }
+  }
+
+  async function renegotiateAllPeers() {
+    const jobs = [];
+    for (const uid of state.call.peers.keys()) {
+        jobs.push(renegotiatePeer(uid));
+    }
+    await Promise.allSettled(jobs);
+  }
+
+  function getRequestedVideoConstraints() {
+    if (state.devicePrefs.camId) {
+        return { deviceId: { exact: state.devicePrefs.camId } };
+    }
+    if (isMobile) {
+        return { facingMode: { ideal: state.devicePrefs.camFacing || "user" } };
+    }
+    return true;
+  }
+  
+  function attachTrackToPeer(userId, track, streamHint = null) {
+    const card = ensureCallTile(userId, false);
+    if (!card || !card.video || !track) return;
+    let remoteStream = state.call.remoteStreams.get(userId);
+    if (!remoteStream) {
+        remoteStream = new MediaStream();
+        state.call.remoteStreams.set(userId, remoteStream);
+    }
+    const candidates = streamHint ? streamHint.getTracks() : [track];
+    candidates.forEach((candidate) => {
+        if (!remoteStream.getTracks().some((existing) => existing.id === candidate.id)) {
+            remoteStream.addTrack(candidate);
+        }
+    });
+    card.video.srcObject = remoteStream;
+    card.video.style.transform = "none";
+    applySpeakerToMedia(card.video);
+    safePlay(card.video);
+  }
+  
   async function ensurePeer(userId, createOffer) {
     userId = Number(userId);
     if (state.call.peers.has(userId)) return state.call.peers.get(userId);
   
-    const iceServers = state.call.iceServers || [
+    const defaultIceServers = [
         { urls: "stun:stun.l.google.com:19302" },
         { urls: "stun:stun1.l.google.com:19302" },
     ];
-    const pc = new RTCPeerConnection({ iceServers, iceCandidatePoolSize: 4 });
+    const iceServers = isLocalDevHost ? [] : (state.call.iceServers || defaultIceServers);
+    const pc = new RTCPeerConnection({ iceServers, iceCandidatePoolSize: isLocalDevHost ? 0 : 4 });
   
     pc._makingOffer = false;
     pc._ignoreOffer = false;
+    pc._audioSender = pc.addTransceiver("audio", { direction: "sendrecv" }).sender;
+    pc._videoSender = pc.addTransceiver("video", { direction: "sendrecv" }).sender;
   
-    if (state.call.localStream) {
-        state.call.localStream.getTracks().forEach((track) => {
-            pc.addTrack(track, state.call.localStream);
-        });
-    }
+    const localAudio = state.call.localStream?.getAudioTracks()[0] || null;
+    const localVideo = state.call.localStream?.getVideoTracks()[0] || null;
+    if (localAudio) await pc._audioSender.replaceTrack(localAudio);
+    if (localVideo) await pc._videoSender.replaceTrack(localVideo);
   
     pc.onicecandidate = (ev) => {
         if (!ev.candidate) return;
@@ -1372,37 +1565,27 @@ const state = {
     };
   
     pc.ontrack = (ev) => {
-        const stream = ev.streams && ev.streams[0] ? ev.streams[0] : new MediaStream([ev.track]);
-        attachStreamToPeer(userId, stream);
+        const remoteTrack = ev.track;
+        const remoteStream = ev.streams?.[0] || null;
+        attachTrackToPeer(userId, remoteTrack, remoteStream);
+        remoteTrack.onunmute = () => attachTrackToPeer(userId, remoteTrack, remoteStream);
+        remoteTrack.onended = () => {
+            const stored = state.call.remoteStreams.get(userId);
+            if (!stored) return;
+            stored.getTracks().forEach((existing) => {
+                if (existing.id === remoteTrack.id) {
+                    stored.removeTrack(existing);
+                }
+            });
+        };
     };
   
     pc.onconnectionstatechange = () => {
         console.log(`Peer ${userId}: ${pc.connectionState}`);
         if (pc.connectionState === "failed") {
             if (state.call.peers.get(userId) === pc && createOffer) {
-                try { pc.restartIce(); } catch(e) {}
+                try { pc.restartIce(); } catch (e) {}
             }
-        }
-    };
-  
-    pc.onnegotiationneeded = async () => {
-        try {
-            pc._makingOffer = true;
-            const offer = await pc.createOffer();
-            if (pc.signalingState !== "stable") return;
-            await pc.setLocalDescription(offer);
-            if (state.ws && state.ws.readyState === WebSocket.OPEN) {
-                state.ws.send(JSON.stringify({
-                    type: "call:signal",
-                    chat_id: state.call.chatId,
-                    to_user: userId,
-                    signal: { type: "offer", sdp: pc.localDescription },
-                }));
-            }
-        } catch (e) {
-            console.error("Negotiation failed:", e);
-        } finally {
-            pc._makingOffer = false;
         }
     };
   
@@ -1483,17 +1666,17 @@ const state = {
         return;
     }
     
-    let iceServers = [
+    let iceServers = isLocalDevHost ? [] : [
         { urls: "stun:stun.l.google.com:19302" },
         { urls: "stun:stun1.l.google.com:19302" },
     ];
     try {
         const config = await api("/api/rtc-config");
-        if (config.ice_servers && config.ice_servers.length > 0) {
+        if (!isLocalDevHost && config.ice_servers && config.ice_servers.length > 0) {
             iceServers = config.ice_servers;
         }
     } catch (_) {}
-  
+
     state.call.active = true;
     state.call.chatId = state.currentChatId;
     state.call.startedAt = Date.now();
@@ -1503,6 +1686,7 @@ const state = {
     state.call.iceServers = iceServers;
     state.call.peers.clear();
     state.call.tiles.clear();
+    state.call.remoteStreams.clear();
     
     const callGrid = qs("callGrid");
     if (callGrid) callGrid.innerHTML = "";
@@ -1519,8 +1703,12 @@ const state = {
     setTileState(state.me?.id, { mic: state.call.mic, cam: state.call.cam, screen: state.call.screen });
     await applyAudioMode(state.devicePrefs.audioMode || "speaker");
     
-    const callTitle = qs("callTitle");
-    if (callTitle && state.currentChat) callTitle.textContent = `Звонок: ${state.currentChat.title || state.currentChat.peer?.nickname}`;
+    const callTitleLabel = qs("callTitleLabel");
+    if (callTitleLabel) {
+        callTitleLabel.textContent = state.currentChat
+            ? `Звонок: ${state.currentChat.title || state.currentChat.peer?.nickname || "чат"}`
+            : "Звонок";
+    }
     
     show(qs("callOverlay"));
     hide(qs("btnCallRestore"));
@@ -1536,7 +1724,7 @@ const state = {
         screen: state.call.screen,
     }));
   }
-  
+
   function stopCallTimer() {
     if (state.call.timer) {
         clearInterval(state.call.timer);
@@ -1558,6 +1746,7 @@ const state = {
     state.call.active = false;
     state.call.chatId = null;
     state.call.startedAt = null;
+    state.call.remoteStreams.clear();
     state.call.screen = false;
     state.call.cam = false;
     state.call.mic = true;
@@ -1565,12 +1754,14 @@ const state = {
     stopCallTimer();
     hide(qs("callOverlay"));
     hide(qs("btnCallRestore"));
+    const callTitleLabel = qs("callTitleLabel");
+    if (callTitleLabel) callTitleLabel.textContent = "Звонок";
     const callGrid = qs("callGrid");
     if (callGrid) callGrid.innerHTML = "";
     updateCallButtons();
     state.ui.callMinimized = false;
   }
-  
+
   function leaveCall() {
     if (!state.call.active) return;
     if (state.ws && state.ws.readyState === WebSocket.OPEN) {
@@ -1601,16 +1792,16 @@ const state = {
             state.call.localStream?.removeTrack(t);
         });
         for (const pc of state.call.peers.values()) {
-            const senders = pc.getSenders();
-            const videoSender = senders.find((s) => s.track && s.track.kind === "video");
+            const videoSender = getPeerSender(pc, "video");
             if (videoSender) {
                 await videoSender.replaceTrack(null);
             }
         }
+        await renegotiateAllPeers();
     } else {
         try {
             const camStream = await navigator.mediaDevices.getUserMedia({
-                video: state.devicePrefs.camId ? { deviceId: { exact: state.devicePrefs.camId } } : true,
+                video: getRequestedVideoConstraints(),
             });
             const track = camStream.getVideoTracks()[0];
             if (!track) return;
@@ -1623,14 +1814,12 @@ const state = {
             state.call.cam = true;
             state.call.screen = false;
             for (const pc of state.call.peers.values()) {
-                const senders = pc.getSenders();
-                const videoSender = senders.find((s) => s.track && s.track.kind === "video");
+                const videoSender = getPeerSender(pc, "video");
                 if (videoSender) {
                     await videoSender.replaceTrack(track);
-                } else {
-                    pc.addTrack(track, state.call.localStream);
                 }
             }
+            await renegotiateAllPeers();
         } catch (e) {
             alert("Ошибка доступа к камере: " + e.message);
             return;
@@ -1650,7 +1839,7 @@ const state = {
   async function toggleScreenShare() {
     if (!state.call.active) return;
     
-    if (!('getDisplayMedia' in navigator.mediaDevices)) {
+    if (!("getDisplayMedia" in navigator.mediaDevices)) {
         alert("Демонстрация экрана недоступна на мобильных устройствах.");
         return;
     }
@@ -1664,12 +1853,12 @@ const state = {
             state.call.localStream?.removeTrack(t);
         });
         for (const pc of state.call.peers.values()) {
-            const senders = pc.getSenders();
-            const videoSender = senders.find((s) => s.track && s.track.kind === "video");
+            const videoSender = getPeerSender(pc, "video");
             if (videoSender) {
                 await videoSender.replaceTrack(null);
             }
         }
+        await renegotiateAllPeers();
         const localCard = state.call.tiles.get(state.me?.id);
         if (localCard) {
             localCard.video.srcObject = new MediaStream(state.call.localStream?.getTracks() || []);
@@ -1705,14 +1894,12 @@ const state = {
         state.call.screen = true;
         
         for (const pc of state.call.peers.values()) {
-            const senders = pc.getSenders();
-            const videoSender = senders.find((s) => s.track && s.track.kind === "video");
+            const videoSender = getPeerSender(pc, "video");
             if (videoSender) {
                 await videoSender.replaceTrack(track);
-            } else {
-                pc.addTrack(track, state.call.localStream);
             }
         }
+        await renegotiateAllPeers();
         
         const localCard = state.call.tiles.get(state.me?.id);
         if (localCard) {
@@ -1727,7 +1914,7 @@ const state = {
         alert("Не удалось начать демонстрацию экрана: " + e.message);
     }
   }
-  
+
   function stopWsHeartbeat() {
     if (state.wsMeta.pingTimer) {
         clearInterval(state.wsMeta.pingTimer);
@@ -1869,6 +2056,28 @@ const state = {
                 setChatOpen(false);
             }
             refreshSide();
+        }
+        if (msg.type === "group:member_removed") {
+            if (msg.payload.user_id === state.me?.id && state.currentChatId === msg.payload.chat_id) {
+                state.currentChatId = null;
+                state.currentChat = null;
+                const msgEl = qs("messages");
+                const memEl = qs("chatMembers");
+                if (msgEl) msgEl.innerHTML = "";
+                if (memEl) memEl.innerHTML = "";
+                setChatHeader(null);
+                setChatOpen(false);
+            }
+            if (state.currentChatId === msg.payload.chat_id) {
+                loadMembers(msg.payload.chat_id);
+            }
+            refreshSide();
+        }
+        if (msg.type === "group:member_role") {
+            if (state.currentChatId === msg.payload.chat_id) {
+                loadMembers(msg.payload.chat_id);
+            }
+            loadChats();
         }
         if (msg.type === "user:blocked") {
             refreshSide();
@@ -2017,6 +2226,7 @@ const state = {
     const btnLeaveCall = qs("btnLeaveCall");
     const btnToggleMic = qs("btnToggleMic");
     const btnToggleCam = qs("btnToggleCam");
+    const btnRotateCam = qs("btnRotateCam");
     const btnShareScreen = qs("btnShareScreen");
     const btnDevices = qs("btnDevices");
     const devicePanel = qs("devicePanel");
@@ -2194,25 +2404,40 @@ const state = {
     if (btnGroup) btnGroup.onclick = () => groupDialog?.showModal();
     if (groupClose) groupClose.onclick = () => groupDialog?.close();
     if (groupCreate) groupCreate.onclick = async () => {
-        const members = (qs("groupMembers")?.value || "").split(",").map((v) => parseInt(v.trim(), 10)).filter((n) => Number.isInteger(n));
-        const out = await api("/api/groups", {
-            method: "POST",
-            body: JSON.stringify({ title: qs("groupTitle")?.value || "", members }),
-        });
-        groupDialog?.close();
-        await loadChats();
-        await openChat(out.chat_id);
+        try {
+            const members = (qs("groupMembers")?.value || "")
+                .split(",")
+                .map((v) => v.trim().replace(/^@/, "").toLowerCase())
+                .filter(Boolean);
+            const out = await api("/api/groups", {
+                method: "POST",
+                body: JSON.stringify({ title: qs("groupTitle")?.value || "", members }),
+            });
+            const groupTitle = qs("groupTitle");
+            const groupMembers = qs("groupMembers");
+            if (groupTitle) groupTitle.value = "";
+            if (groupMembers) groupMembers.value = "";
+            groupDialog?.close();
+            await loadChats();
+            await openChat(out.chat_id);
+        } catch (e) {
+            alert(e.message);
+        }
     };
     if (btnInviteGroup) btnInviteGroup.onclick = async () => {
         if (!state.currentChat || state.currentChat.type !== "group") return;
         const raw = prompt("Введите @username для инвайта");
         const username = String(raw || "").trim();
         if (!username) return;
-        await api(`/api/groups/${state.currentChatId}/invite/username`, {
-            method: "POST",
-            body: JSON.stringify({ username }),
-        });
-        alert("Инвайт отправлен");
+        try {
+            await api(`/api/groups/${state.currentChatId}/invite/username`, {
+                method: "POST",
+                body: JSON.stringify({ username }),
+            });
+            alert("Инвайт отправлен");
+        } catch (e) {
+            alert(e.message);
+        }
     };
     if (btnLeaveChat) btnLeaveChat.onclick = async () => {
         if (!state.currentChatId) return;
@@ -2379,6 +2604,7 @@ const state = {
     if (btnLeaveCall) btnLeaveCall.onclick = leaveCall;
     if (btnToggleMic) btnToggleMic.onclick = toggleMic;
     if (btnToggleCam) btnToggleCam.onclick = toggleCam;
+    if (btnRotateCam) btnRotateCam.onclick = rotateCamera;
     if (btnShareScreen) btnShareScreen.onclick = toggleScreenShare;
     if (btnDevices) btnDevices.onclick = async () => {
         if (devicePanel) {
@@ -2431,20 +2657,15 @@ const state = {
   
     installResponsiveEnvironment();
     bindUi();
-    const gate = await api("/api/gate/status");
     const sessionOk = await ensureSession();
     if (sessionOk) {
         await onAuthorized();
         return;
     }
     hide(qs("app"));
-    if (gate.ok) {
-        hide(qs("gateScreen"));
-        show(qs("authScreen"));
-    } else {
-        show(qs("gateScreen"));
-        hide(qs("authScreen"));
-    }
+    hide(qs("gateScreen"));
+    show(qs("authScreen"));
   }
   
   boot();
+

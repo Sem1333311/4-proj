@@ -165,7 +165,10 @@ class DirectIn(BaseModel):
 
 class GroupIn(BaseModel):
     title: str
-    members: list[int] = []
+    members: list[str] = []
+
+class MemberRoleIn(BaseModel):
+    role: str
 
 class SettingsIn(BaseModel):
     allow_friend_requests: str = "everyone"
@@ -350,8 +353,7 @@ def get_current_user(request: Request) -> sqlite3.Row:
     return user
 
 def require_gate(request: Request):
-    if request.cookies.get("lan_gate_ok") != "1":
-        raise HTTPException(status_code=403, detail="Access code required")
+    return
 
 def ensure_settings(conn: sqlite3.Connection, user_id: int):
     conn.execute(
@@ -381,6 +383,12 @@ def can_access_chat(conn: sqlite3.Connection, user_id: int, chat_id: int) -> boo
 
 def get_chat(conn: sqlite3.Connection, chat_id: int) -> Optional[sqlite3.Row]:
     return conn.execute("SELECT * FROM chats WHERE id = ?", (chat_id,)).fetchone()
+
+def get_chat_member(conn: sqlite3.Connection, chat_id: int, user_id: int) -> Optional[sqlite3.Row]:
+    return conn.execute(
+        "SELECT * FROM chat_members WHERE chat_id = ? AND user_id = ?",
+        (chat_id, user_id),
+    ).fetchone()
 
 def get_direct_peer(conn: sqlite3.Connection, chat_id: int, user_id: int) -> Optional[sqlite3.Row]:
     return conn.execute(
@@ -504,15 +512,11 @@ async def media_file(file_name: str, request: Request, token: str = ""):
 
 @app.get("/api/gate/status")
 async def gate_status(request: Request):
-    return {"ok": request.cookies.get("lan_gate_ok") == "1"}
+    return {"ok": True}
 
 @app.post("/api/gate")
 async def gate(data: GateIn):
-    if data.code != ACCESS_CODE:
-        raise HTTPException(status_code=403, detail="Неверный код доступа")
-    response = JSONResponse({"ok": True})
-    response.set_cookie("lan_gate_ok", "1", httponly=True, samesite="lax", max_age=60 * 60 * 24 * 30)
-    return response
+    return JSONResponse({"ok": True})
 
 @app.post("/api/register")
 async def register(data: RegisterIn, request: Request):
@@ -887,24 +891,52 @@ async def create_group(data: GroupIn, user=Depends(get_current_user)):
     if len(title) < 2:
         raise HTTPException(status_code=400, detail="Название группы слишком короткое")
     conn = get_db()
-    member_ids = {m for m in data.members if isinstance(m, int)}
-    member_ids.add(user["id"])
-    final_members = {user["id"]}
-    for uid in member_ids:
-        if uid == user["id"]:
-            continue
-        if not is_friend(conn, user["id"], uid):
-            continue
-        allowed, _ = can_invite_to_group(conn, user["id"], uid)
-        if allowed:
-            final_members.add(uid)
+    usernames = {
+        str(member).strip().lower().lstrip("@")
+        for member in data.members
+        if str(member).strip()
+    }
+    pending_invites: list[dict] = []
+    invited_usernames: list[str] = []
     with db_lock, conn:
         cursor = conn.execute("INSERT INTO chats(type, title, created_by, created_at) VALUES ('group', ?, ?, ?)", (title, user["id"], now_iso()))
         chat_id = cursor.lastrowid
-        for uid in final_members:
-            conn.execute("INSERT OR IGNORE INTO chat_members(chat_id, user_id, role, joined_at) VALUES (?, ?, ?, ?)", (chat_id, uid, "owner" if uid == user["id"] else "member", now_iso()))
+        conn.execute(
+            "INSERT OR IGNORE INTO chat_members(chat_id, user_id, role, joined_at) VALUES (?, ?, 'owner', ?)",
+            (chat_id, user["id"], now_iso()),
+        )
+        for username in usernames:
+            target = conn.execute(
+                "SELECT id, username, nickname FROM users WHERE username = ?",
+                (username,),
+            ).fetchone()
+            if not target or target["id"] == user["id"]:
+                continue
+            if not is_friend(conn, user["id"], target["id"]):
+                continue
+            allowed, _ = can_invite_to_group(conn, user["id"], target["id"])
+            if not allowed:
+                continue
+            conn.execute(
+                "INSERT OR IGNORE INTO group_invites(chat_id, inviter_id, invitee_id, status, created_at) VALUES (?, ?, ?, 'pending', ?)",
+                (chat_id, user["id"], target["id"], now_iso()),
+            )
+            invite = conn.execute(
+                "SELECT gi.id, gi.chat_id, gi.inviter_id, gi.invitee_id, gi.status, gi.created_at, c.title as chat_title, u.username as inviter_username, u.nickname as inviter_nickname "
+                "FROM group_invites gi "
+                "JOIN chats c ON c.id = gi.chat_id "
+                "JOIN users u ON u.id = gi.inviter_id "
+                "WHERE gi.chat_id = ? AND gi.invitee_id = ? AND gi.status = 'pending' "
+                "ORDER BY gi.id DESC LIMIT 1",
+                (chat_id, target["id"]),
+            ).fetchone()
+            if invite:
+                pending_invites.append(dict(invite))
+                invited_usernames.append(target["username"])
     conn.close()
-    return {"chat_id": chat_id}
+    for invite in pending_invites:
+        await push_to_user(invite["invitee_id"], {"type": "group:invite", "payload": invite})
+    return {"chat_id": chat_id, "invited": invited_usernames}
 
 @app.delete("/api/groups/{chat_id}")
 async def delete_group(chat_id: int, user=Depends(get_current_user)):
@@ -991,6 +1023,77 @@ async def invite_group_member(chat_id: int, data: DirectIn, user=Depends(get_cur
     conn.close()
     await push_to_user(data.user_id, {"type": "chat:added", "payload": {"chat_id": chat_id}})
     await broadcast_to_chat(chat_id, {"type": "group:member_added", "payload": {"chat_id": chat_id, "user_id": data.user_id}})
+    return {"ok": True}
+
+@app.delete("/api/groups/{chat_id}/members/{target_user_id}")
+async def kick_group_member(chat_id: int, target_user_id: int, user=Depends(get_current_user)):
+    conn = get_db()
+    chat = get_chat(conn, chat_id)
+    if not chat or chat["type"] != "group":
+        conn.close()
+        raise HTTPException(status_code=404, detail="Группа не найдена")
+    actor = get_chat_member(conn, chat_id, user["id"])
+    target = get_chat_member(conn, chat_id, target_user_id)
+    if not actor or not target:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Участник не найден")
+    if target_user_id == user["id"]:
+        conn.close()
+        raise HTTPException(status_code=400, detail="Используйте выход из группы")
+    actor_role = actor["role"]
+    target_role = target["role"]
+    allowed = False
+    if actor_role == "owner" and target_role in {"member", "admin"}:
+        allowed = True
+    if actor_role == "admin" and target_role == "member":
+        allowed = True
+    if not allowed:
+        conn.close()
+        raise HTTPException(status_code=403, detail="Недостаточно прав для исключения участника")
+    with db_lock, conn:
+        conn.execute("DELETE FROM chat_members WHERE chat_id = ? AND user_id = ?", (chat_id, target_user_id))
+    conn.close()
+    payload = {"chat_id": chat_id, "user_id": target_user_id}
+    await push_to_user(target_user_id, {"type": "group:member_removed", "payload": payload})
+    await broadcast_to_chat(chat_id, {"type": "group:member_removed", "payload": payload})
+    return {"ok": True}
+
+@app.post("/api/groups/{chat_id}/members/{target_user_id}/role")
+async def update_group_member_role(chat_id: int, target_user_id: int, data: MemberRoleIn, user=Depends(get_current_user)):
+    new_role = data.role.strip().lower()
+    if new_role not in {"member", "admin", "owner"}:
+        raise HTTPException(status_code=400, detail="Недопустимая роль")
+    conn = get_db()
+    chat = get_chat(conn, chat_id)
+    if not chat or chat["type"] != "group":
+        conn.close()
+        raise HTTPException(status_code=404, detail="Группа не найдена")
+    actor = get_chat_member(conn, chat_id, user["id"])
+    target = get_chat_member(conn, chat_id, target_user_id)
+    if not actor or actor["role"] != "owner":
+        conn.close()
+        raise HTTPException(status_code=403, detail="Управлять ролями может только owner")
+    if not target:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Участник не найден")
+    if target_user_id == user["id"]:
+        conn.close()
+        raise HTTPException(status_code=400, detail="Нельзя менять свою роль этим действием")
+    if new_role != "owner" and target["role"] == "owner":
+        conn.close()
+        raise HTTPException(status_code=400, detail="Сначала передайте owner другому участнику")
+    role_updates = [(target_user_id, new_role)]
+    with db_lock, conn:
+        if new_role == "owner":
+            conn.execute("UPDATE chats SET created_by = ? WHERE id = ?", (target_user_id, chat_id))
+            conn.execute("UPDATE chat_members SET role = 'admin' WHERE chat_id = ? AND user_id = ?", (chat_id, user["id"]))
+            conn.execute("UPDATE chat_members SET role = 'owner' WHERE chat_id = ? AND user_id = ?", (chat_id, target_user_id))
+            role_updates.append((user["id"], "admin"))
+        else:
+            conn.execute("UPDATE chat_members SET role = ? WHERE chat_id = ? AND user_id = ?", (new_role, chat_id, target_user_id))
+    conn.close()
+    for uid, role in role_updates:
+        await broadcast_to_chat(chat_id, {"type": "group:member_role", "payload": {"chat_id": chat_id, "user_id": uid, "role": role}})
     return {"ok": True}
 
 @app.post("/api/groups/{chat_id}/invite/username")
@@ -1095,6 +1198,10 @@ async def get_chats(user=Depends(get_current_user)):
         else:
             item["can_call"] = True
             item["can_delete"] = item["created_by"] == user["id"]
+            role = conn.execute("SELECT role FROM chat_members WHERE chat_id = ? AND user_id = ?", (item["id"], user["id"])).fetchone()
+            count = conn.execute("SELECT COUNT(*) as total FROM chat_members WHERE chat_id = ?", (item["id"],)).fetchone()
+            item["my_role"] = role["role"] if role else "member"
+            item["member_count"] = count["total"] if count else 0
         items.append(item)
     conn.close()
     return items
