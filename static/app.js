@@ -339,9 +339,13 @@ const state = {
   
   function appendMessage(m) {
     const mine = m.user_id === state.me?.id;
+    const isRead = mine && (m.read_count > 0);
     const item = document.createElement("div");
     item.dataset.mid = String(m.id);
     item.className = `message ${mine ? "mine" : ""}`;
+    const statusHtml = mine
+        ? `<span class="msg-status ${isRead ? "read" : ""}" data-mid="${m.id}">${isRead ? "✓✓" : "✓"}</span>`
+        : "";
     item.innerHTML = `
         ${mine ? "" : avatarMarkup({ avatar: m.avatar, label: m.nickname, seed: `user-${m.user_id}`, className: "avatar-sm" })}
         <div class="message-bubble">
@@ -349,6 +353,7 @@ const state = {
                 <span class="message-author">${escapeHtml(m.nickname)}</span>
                 <span>@${escapeHtml(m.username)}</span>
                 <span>${formatTime(m.created_at)}</span>
+                ${statusHtml}
             </div>
             <div class="message-content">${messageBody(m)}</div>
         </div>
@@ -357,7 +362,8 @@ const state = {
     actions.className = "message-actions";
     const delMe = document.createElement("button");
     delMe.className = "ghost";
-    delMe.textContent = "Удалить у себя";
+    delMe.textContent = "🗑️ Мне";
+    delMe.title = "Удалить у себя";
     delMe.onclick = async () => {
         try {
             await api(`/api/messages/${m.id}?mode=me`, { method: "DELETE" });
@@ -370,7 +376,8 @@ const state = {
     if (mine) {
         const delAll = document.createElement("button");
         delAll.className = "danger";
-        delAll.textContent = "Удалить у всех";
+        delAll.textContent = "🗑️ Всем";
+        delAll.title = "Удалить у всех";
         delAll.onclick = async () => {
             if (!confirm("Удалить сообщение у всех?")) return;
             try {
@@ -460,16 +467,6 @@ const state = {
             el.onclick = () => openChat(chat.id);
             list.appendChild(el);
         });
-    return;
-    state.chats
-        .filter((c) => !q || (c.title || c.peer?.nickname || "Без названия").toLowerCase().includes(q))
-        .forEach((chat) => {
-            const el = document.createElement("div");
-            el.className = "item";
-            el.innerHTML = `<b>${escapeHtml(chat.title || chat.peer?.nickname || "Без названия")}</b><small>${escapeHtml(chat.last_text || "")}</small>`;
-            el.onclick = () => openChat(chat.id);
-            list.appendChild(el);
-        });
   }
   
   function setChatHeader(chat) {
@@ -499,8 +496,10 @@ const state = {
     if (!chat) {
         state.membersById = new Map();
     }
+    const btnShowMembers = qs("btnShowMembers");
     if (canCall) show(btnCall); else hide(btnCall);
     if (group) show(btnInvite); else hide(btnInvite);
+    if (group) show(btnShowMembers); else hide(btnShowMembers);
     if (btnInvite) btnInvite.title = group ? "Пригласить по username" : "Пригласить";
     if (chat) show(btnLeave); else hide(btnLeave);
     if (btnLeave) {
@@ -513,6 +512,7 @@ const state = {
         btnDelete.title = "Удалить группу";
     }
     if (group) show(membersPanel); else hide(membersPanel);
+    if (!group) closeMembersSheet();
     if (stack) stack.classList.toggle("has-members", group);
     setEmptyState(!chat);
   }
@@ -542,26 +542,6 @@ const state = {
         `;
         const actions = document.createElement("div");
         actions.className = "actions";
-        const dm = document.createElement("button");
-        dm.textContent = "ЛС";
-        dm.onclick = async () => {
-            if (m.id === state.me.id) return;
-            const out = await api("/api/chats/direct", { method: "POST", body: JSON.stringify({ user_id: m.id }) });
-            await loadChats();
-            await openChat(out.chat_id);
-        };
-        const call = document.createElement("button");
-        call.textContent = "Позвонить";
-        call.onclick = async () => {
-            if (m.id === state.me.id) return;
-            const out = await api("/api/chats/direct", { method: "POST", body: JSON.stringify({ user_id: m.id }) });
-            await loadChats();
-            await openChat(out.chat_id);
-            await startCall();
-        };
-        actions.appendChild(dm);
-        actions.appendChild(call);
-        actions.innerHTML = "";
         if (m.id !== state.me.id) {
             const dm = document.createElement("button");
             dm.textContent = "💬";
@@ -640,35 +620,6 @@ const state = {
     if (state.currentChatId === chatId) {
         setChatHeader(state.currentChat);
     }
-    return;
-    members.forEach((m) => {
-        const el = document.createElement("div");
-        el.className = "item";
-        el.innerHTML = `<b>${escapeHtml(m.nickname)}</b><small>@${escapeHtml(m.username)} (${m.role}) #${m.id}</small>`;
-        const actions = document.createElement("div");
-        actions.className = "actions";
-        const dm = document.createElement("button");
-        dm.textContent = "ЛС";
-        dm.onclick = async () => {
-            if (m.id === state.me.id) return;
-            const out = await api("/api/chats/direct", { method: "POST", body: JSON.stringify({ user_id: m.id }) });
-            await loadChats();
-            await openChat(out.chat_id);
-        };
-        const call = document.createElement("button");
-        call.textContent = "Позвонить";
-        call.onclick = async () => {
-            if (m.id === state.me.id) return;
-            const out = await api("/api/chats/direct", { method: "POST", body: JSON.stringify({ user_id: m.id }) });
-            await loadChats();
-            await openChat(out.chat_id);
-            await startCall();
-        };
-        actions.appendChild(dm);
-        actions.appendChild(call);
-        el.appendChild(actions);
-        wrap.appendChild(el);
-    });
   }
   
   async function openChat(chatId) {
@@ -683,6 +634,7 @@ const state = {
     if (messages) messages.innerHTML = "";
     const data = await api(`/api/chats/${chatId}/messages`);
     data.forEach(appendMessage);
+    await markChatRead(chatId);
     await loadMembers(chatId);
   }
   
@@ -749,32 +701,6 @@ const state = {
         el.appendChild(actions);
         list.appendChild(el);
     });
-    return;
-    state.friends.forEach((f) => {
-        const el = document.createElement("div");
-        el.className = "item";
-        el.innerHTML = `<b>${escapeHtml(f.nickname)}</b><small>@${escapeHtml(f.username)} #${f.id}</small>`;
-        const actions = document.createElement("div");
-        actions.className = "actions";
-        const dm = document.createElement("button");
-        dm.textContent = "Чат";
-        dm.onclick = async () => {
-            const out = await api("/api/chats/direct", { method: "POST", body: JSON.stringify({ user_id: f.id }) });
-            await loadChats();
-            await openChat(out.chat_id);
-        };
-        const block = document.createElement("button");
-        block.className = "danger";
-        block.textContent = "Блок";
-        block.onclick = async () => {
-            await api(`/api/users/${f.id}/block`, { method: "POST", body: "{}" });
-            await refreshSide();
-        };
-        actions.appendChild(dm);
-        actions.appendChild(block);
-        el.appendChild(actions);
-        list.appendChild(el);
-    });
   }
   
   async function loadFriendRequests() {
@@ -795,31 +721,6 @@ const state = {
                 </div>
             </div>
         `;
-        const actions = document.createElement("div");
-        actions.className = "actions";
-        const yes = document.createElement("button");
-        yes.textContent = "Принять";
-        yes.onclick = async () => {
-            await api(`/api/friends/request/${r.id}/accept`, { method: "POST", body: "{}" });
-            await refreshSide();
-        };
-        const no = document.createElement("button");
-        no.className = "danger";
-        no.textContent = "Отклонить";
-        no.onclick = async () => {
-            await api(`/api/friends/request/${r.id}/reject`, { method: "POST", body: "{}" });
-            await refreshSide();
-        };
-        actions.appendChild(yes);
-        actions.appendChild(no);
-        el.appendChild(actions);
-        list.appendChild(el);
-    });
-    return;
-    rows.forEach((r) => {
-        const el = document.createElement("div");
-        el.className = "item";
-        el.innerHTML = `<b>${escapeHtml(r.nickname)}</b><small>@${escapeHtml(r.username)}</small>`;
         const actions = document.createElement("div");
         actions.className = "actions";
         const yes = document.createElement("button");
@@ -880,31 +781,6 @@ const state = {
         el.appendChild(actions);
         list.appendChild(el);
     });
-    return;
-    rows.forEach((r) => {
-        const el = document.createElement("div");
-        el.className = "item";
-        el.innerHTML = `<b>${escapeHtml(r.chat_title || "Группа")}</b><small>от ${escapeHtml(r.inviter_nickname)} @${escapeHtml(r.inviter_username)}</small>`;
-        const actions = document.createElement("div");
-        actions.className = "actions";
-        const yes = document.createElement("button");
-        yes.textContent = "Принять";
-        yes.onclick = async () => {
-            await api(`/api/groups/invites/${r.id}/accept`, { method: "POST", body: "{}" });
-            await Promise.all([loadGroupInvites(), loadChats()]);
-        };
-        const no = document.createElement("button");
-        no.className = "danger";
-        no.textContent = "Отклонить";
-        no.onclick = async () => {
-            await api(`/api/groups/invites/${r.id}/reject`, { method: "POST", body: "{}" });
-            await loadGroupInvites();
-        };
-        actions.appendChild(yes);
-        actions.appendChild(no);
-        el.appendChild(actions);
-        list.appendChild(el);
-    });
   }
   
   async function loadBlockedList() {
@@ -937,26 +813,25 @@ const state = {
         el.appendChild(actions);
         list.appendChild(el);
     });
-    return;
-    rows.forEach((u) => {
-        const el = document.createElement("div");
-        el.className = "item";
-        el.innerHTML = `<b>${escapeHtml(u.nickname)}</b><small>@${escapeHtml(u.username)} #${u.id}</small>`;
-        const actions = document.createElement("div");
-        actions.className = "actions";
-        const un = document.createElement("button");
-        un.textContent = "Разблокировать";
-        un.onclick = async () => {
-            await api(`/api/users/${u.id}/block`, { method: "DELETE" });
-            await loadBlockedList();
-            await refreshSide();
-        };
-        actions.appendChild(un);
-        el.appendChild(actions);
-        list.appendChild(el);
-    });
   }
   
+  async function markChatRead(chatId) {
+    try {
+        await api(`/api/chats/${chatId}/read`, { method: "POST", body: "{}" });
+    } catch (_) {}
+  }
+
+  function updateReadStatusUpTo(upToId) {
+    const messages = qs("messages");
+    if (!messages) return;
+    messages.querySelectorAll(".msg-status[data-mid]").forEach((el) => {
+        if (Number(el.dataset.mid) <= upToId) {
+            el.textContent = "✓✓";
+            el.classList.add("read");
+        }
+    });
+  }
+
   async function refreshSide() {
     await Promise.all([loadFriends(), loadFriendRequests(), loadGroupInvites(), loadChats()]);
   }
@@ -1010,31 +885,6 @@ const state = {
                 </div>
             </div>
         `;
-        const actions = document.createElement("div");
-        actions.className = "actions";
-        const send = document.createElement("button");
-        send.textContent = "Отправить";
-        send.onclick = async () => {
-            await sendAssetMessage(a.id);
-            qs("assetsDialog")?.close();
-        };
-        const del = document.createElement("button");
-        del.className = "danger";
-        del.textContent = "Удалить";
-        del.onclick = async () => {
-            await api(`/api/assets/${a.id}`, { method: "DELETE" });
-            await loadAssets();
-        };
-        actions.appendChild(send);
-        actions.appendChild(del);
-        el.appendChild(actions);
-        list.appendChild(el);
-    });
-    return;
-    state.assets.forEach((a) => {
-        const el = document.createElement("div");
-        el.className = "item";
-        el.innerHTML = `<b>${escapeHtml(a.title || a.kind)}</b><small>${a.kind}</small><br><img src="${withMediaToken(a.file_url)}" style="max-width:72px;max-height:72px;border-radius:8px;" />`;
         const actions = document.createElement("div");
         actions.className = "actions";
         const send = document.createElement("button");
@@ -1241,6 +1091,10 @@ const state = {
     const mic = statePayload.mic ? "on" : "off";
     const cam = statePayload.cam ? (statePayload.screen ? "screen" : "on") : "off";
     card.right.textContent = `mic:${mic} cam:${cam}`;
+    // Для удалённых участников: если камера появилась и видео на паузе — запустить
+    if (userId !== state.me?.id && cam !== "off" && card.video?.srcObject && card.video.paused) {
+        safePlay(card.video);
+    }
   }
   
   function removePeer(userId) {
@@ -1414,14 +1268,17 @@ const state = {
   }
 
   async function rotateCamera() {
-    const { cams } = await listMediaDevices();
-    if (cams.length > 1) {
-        const currentIndex = Math.max(0, cams.findIndex((cam) => cam.deviceId === state.devicePrefs.camId));
-        const nextCam = cams[(currentIndex + 1) % cams.length];
-        state.devicePrefs.camId = nextCam?.deviceId || "";
-    } else {
-        state.devicePrefs.camId = "";
+    if (isMobile) {
+        // На iOS/Android надёжнее всего переключать через facingMode, а не deviceId
         state.devicePrefs.camFacing = state.devicePrefs.camFacing === "environment" ? "user" : "environment";
+        state.devicePrefs.camId = "";
+    } else {
+        const { cams } = await listMediaDevices();
+        if (cams.length > 1) {
+            const currentIndex = Math.max(0, cams.findIndex((cam) => cam.deviceId === state.devicePrefs.camId));
+            const nextCam = cams[(currentIndex + 1) % cams.length];
+            state.devicePrefs.camId = nextCam?.deviceId || "";
+        }
     }
     if (state.call.active && state.call.cam && !state.call.screen) {
         await switchCamDevice(state.devicePrefs.camId);
@@ -1506,8 +1363,10 @@ const state = {
     if (state.devicePrefs.camId) {
         return { deviceId: { exact: state.devicePrefs.camId } };
     }
+    const facing = state.devicePrefs.camFacing || "user";
     if (isMobile) {
-        return { facingMode: { ideal: state.devicePrefs.camFacing || "user" } };
+        // iOS требует exact для надёжного переключения; Android - ideal
+        return { facingMode: isLikelyIOS ? { exact: facing } : { ideal: facing } };
     }
     return true;
   }
@@ -1520,10 +1379,11 @@ const state = {
         remoteStream = new MediaStream();
         state.call.remoteStreams.set(userId, remoteStream);
     }
-    const candidates = streamHint ? streamHint.getTracks() : [track];
-    candidates.forEach((candidate) => {
-        if (!remoteStream.getTracks().some((existing) => existing.id === candidate.id)) {
-            remoteStream.addTrack(candidate);
+    // Используем все треки из streamHint, иначе только track
+    const toAdd = (streamHint && streamHint.getTracks().length > 0) ? streamHint.getTracks() : [track];
+    toAdd.forEach((t) => {
+        if (!remoteStream.getTracks().some((e) => e.id === t.id)) {
+            remoteStream.addTrack(t);
         }
     });
     card.video.srcObject = remoteStream;
@@ -1531,7 +1391,7 @@ const state = {
     applySpeakerToMedia(card.video);
     safePlay(card.video);
   }
-  
+
   async function ensurePeer(userId, createOffer) {
     userId = Number(userId);
     if (state.call.peers.has(userId)) return state.call.peers.get(userId);
@@ -1573,11 +1433,15 @@ const state = {
             const stored = state.call.remoteStreams.get(userId);
             if (!stored) return;
             stored.getTracks().forEach((existing) => {
-                if (existing.id === remoteTrack.id) {
-                    stored.removeTrack(existing);
-                }
+                if (existing.id === remoteTrack.id) stored.removeTrack(existing);
             });
         };
+        // iOS/Android: повторная попытка воспроизведения после задержки
+        setTimeout(() => {
+            if (!state.call.active) return;
+            const card = state.call.tiles.get(userId);
+            if (card?.video?.paused && card.video.srcObject) safePlay(card.video);
+        }, 900);
     };
   
     pc.onconnectionstatechange = () => {
@@ -2027,8 +1891,18 @@ const state = {
             return;
         }
         if (msg.type === "message:new") {
-            if (msg.payload.chat_id === state.currentChatId) appendMessage(msg.payload);
+            if (msg.payload.chat_id === state.currentChatId) {
+                appendMessage(msg.payload);
+                // Если это чужое сообщение — отмечаем прочитанным
+                if (msg.payload.user_id !== state.me?.id) markChatRead(state.currentChatId);
+            }
             loadChats();
+        }
+        if (msg.type === "message:read") {
+            const { chat_id, reader_id, up_to_id } = msg.payload;
+            if (reader_id !== state.me?.id && chat_id === state.currentChatId) {
+                updateReadStatusUpTo(up_to_id);
+            }
         }
         if (msg.type === "message:deleted_all") {
             if (msg.payload.chat_id === state.currentChatId) removeMessageById(msg.payload.message_id);
@@ -2173,6 +2047,53 @@ const state = {
     state.currentChatId = null;
   }
   
+  function openMembersSheet() {
+    const panel = qs("groupMembersPanel");
+    const backdrop = qs("membersBackdrop");
+    if (!panel) return;
+    panel.classList.add("members-modal-open");
+    show(panel);
+    if (backdrop) {
+        show(backdrop);
+        // Небольшая задержка чтобы transition сработал
+        requestAnimationFrame(() => {
+            backdrop.classList.add("open");
+            requestAnimationFrame(() => panel.classList.add("sheet-visible"));
+        });
+    }
+    // Закрытие по Escape
+    document.addEventListener("keydown", _membersEscHandler);
+  }
+
+  function closeMembersSheet() {
+    const panel = qs("groupMembersPanel");
+    const backdrop = qs("membersBackdrop");
+    if (!panel) return;
+    panel.classList.remove("sheet-visible");
+    if (backdrop) backdrop.classList.remove("open");
+    // Ждём окончания transition потом скрываем
+    const onEnd = () => {
+        panel.classList.remove("members-modal-open");
+        hide(panel);
+        if (backdrop) hide(backdrop);
+        panel.removeEventListener("transitionend", onEnd);
+    };
+    panel.addEventListener("transitionend", onEnd);
+    document.removeEventListener("keydown", _membersEscHandler);
+    // fallback если transition не сработал
+    setTimeout(() => {
+        if (!panel.classList.contains("sheet-visible")) {
+            panel.classList.remove("members-modal-open");
+            hide(panel);
+            if (backdrop) hide(backdrop);
+        }
+    }, 400);
+  }
+
+  function _membersEscHandler(e) {
+    if (e.key === "Escape") closeMembersSheet();
+  }
+
   function bindUi() {
     setMainTab("chats");
     setChatOpen(false);
@@ -2223,6 +2144,7 @@ const state = {
     const btnChangePassword = qs("btnChangePassword");
     const btnDeleteAccount = qs("btnDeleteAccount");
     const btnCallStart = qs("btnCallStart");
+    const btnShowMembers = qs("btnShowMembers");
     const btnLeaveCall = qs("btnLeaveCall");
     const btnToggleMic = qs("btnToggleMic");
     const btnToggleCam = qs("btnToggleCam");
@@ -2521,28 +2443,6 @@ const state = {
             el.appendChild(actions);
             out.appendChild(el);
         });
-        return;
-        users.forEach((u) => {
-            const el = document.createElement("div");
-            el.className = "item";
-            el.innerHTML = `<b>${escapeHtml(u.nickname)}</b><small>@${escapeHtml(u.username)} #${u.id}</small>`;
-            const actions = document.createElement("div");
-            actions.className = "actions";
-            const add = document.createElement("button");
-            add.textContent = "В друзья";
-            add.onclick = () => api("/api/friends/request", { method: "POST", body: JSON.stringify({ username: u.username }) });
-            const block = document.createElement("button");
-            block.className = "danger";
-            block.textContent = "Блок";
-            block.onclick = async () => {
-                await api(`/api/users/${u.id}/block`, { method: "POST", body: "{}" });
-                await refreshSide();
-            };
-            actions.appendChild(add);
-            actions.appendChild(block);
-            el.appendChild(actions);
-            out.appendChild(el);
-        });
     };
     if (btnSettings) btnSettings.onclick = async () => {
         await loadSettings();
@@ -2601,6 +2501,13 @@ const state = {
         resetToAuthUi();
     };
     if (btnCallStart) btnCallStart.onclick = startCall;
+    if (btnShowMembers) btnShowMembers.onclick = () => openMembersSheet();
+
+    const btnCloseMembers = qs("btnCloseMembers");
+    if (btnCloseMembers) btnCloseMembers.onclick = () => closeMembersSheet();
+
+    const membersBackdrop = qs("membersBackdrop");
+    if (membersBackdrop) membersBackdrop.onclick = () => closeMembersSheet();
     if (btnLeaveCall) btnLeaveCall.onclick = leaveCall;
     if (btnToggleMic) btnToggleMic.onclick = toggleMic;
     if (btnToggleCam) btnToggleCam.onclick = toggleCam;

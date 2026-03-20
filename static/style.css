@@ -1530,3 +1530,126 @@ dialog h4 {
     justify-content: space-between;
   }
 }
+
+/* ─── Read receipts / delivery status ─── */
+.msg-status {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-left: 2px;
+  letter-spacing: -0.03em;
+}
+.msg-status.read {
+  color: var(--line-accent-strong);
+}
+
+/* ─── Message actions: compact ─── */
+.message-actions button {
+  font-size: 12px !important;
+}
+
+/* ─── Fix DM action buttons layout ─── */
+.actions {
+  flex-wrap: wrap;
+}
+.actions button {
+  flex: 0 0 auto;
+}
+
+/* ─── Group members head: flex row with close btn ─── */
+.group-members-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.group-members-title {
+  flex: 1;
+  min-width: 0;
+}
+.members-close-btn {
+  display: none;
+  flex: none;
+  min-width: 36px;
+  min-height: 36px;
+  padding: 8px;
+  border-radius: 50%;
+  font-size: 16px !important;
+}
+
+/* ─── Members backdrop (mobile only) ─── */
+.members-backdrop {
+  display: none;
+}
+
+/* ─── Members bottom-sheet on mobile ─── */
+@media (max-width: 980px) {
+  /* Backdrop dim */
+  .members-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 58;
+    background: rgba(3, 8, 16, 0.65);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    opacity: 0;
+    transition: opacity 0.28s ease;
+    pointer-events: none;
+  }
+  .members-backdrop.open {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  /* Bottom sheet */
+  .group-members.members-modal-open {
+    display: flex !important;
+    position: fixed;
+    /* Не перекрываем верхнюю часть экрана — лист занимает 72% высоты снизу */
+    left: 0;
+    right: 0;
+    bottom: 0;
+    top: auto;
+    max-height: 72vh;
+    z-index: 59;
+    border-radius: 24px 24px 0 0;
+    border-bottom: none;
+    overflow-y: auto;
+    padding: 8px 14px calc(80px + var(--safe-bottom));
+    background: linear-gradient(180deg, rgba(14,24,36,0.99) 0%, rgba(9,16,26,0.99) 100%);
+    box-shadow: 0 -18px 50px rgba(2,8,18,0.55);
+    /* Плавное появление снизу */
+    transform: translateY(100%);
+    transition: transform 0.3s cubic-bezier(0.32, 0.72, 0, 1);
+  }
+  .group-members.members-modal-open.sheet-visible {
+    transform: translateY(0);
+  }
+  .group-members.members-modal-open .member-list {
+    overflow-y: visible;
+    flex: none;
+  }
+
+  /* Ручка сверху (drag-handle) */
+  .group-members.members-modal-open::before {
+    content: "";
+    display: block;
+    width: 44px;
+    height: 5px;
+    border-radius: 999px;
+    background: rgba(145, 181, 223, 0.22);
+    margin: 0 auto 14px;
+    flex: none;
+  }
+
+  /* Показываем кнопку закрытия */
+  .members-close-btn {
+    display: inline-flex;
+  }
+
+  /* Кнопка 👥 всегда видна для группы на мобилках */
+  #btnShowMembers {
+    display: inline-flex !important;
+  }
+}

@@ -158,6 +158,7 @@
 
                 <div class="chat-controls">
                     <button id="btnMobileMenu" class="mobile-only ghost" title="Разделы">📚</button>
+                    <button id="btnShowMembers" class="hidden" title="Участники">👥</button>
                     <button id="btnCallStart" title="Звонок">📞</button>
                     <button id="btnInviteGroup" class="hidden" title="Пригласить">➕</button>
                     <button id="btnLeaveChat" class="danger hidden" title="Выйти">🚪</button>
@@ -166,10 +167,14 @@
             </div>
 
             <div class="chat-stack">
+                <div id="membersBackdrop" class="members-backdrop hidden"></div>
                 <div id="groupMembersPanel" class="group-members hidden">
                     <div class="group-members-head">
-                        <p class="eyebrow">Состав</p>
-                        <h4>Участники</h4>
+                        <div class="group-members-title">
+                            <p class="eyebrow">Состав</p>
+                            <h4>Участники</h4>
+                        </div>
+                        <button id="btnCloseMembers" class="ghost members-close-btn" title="Закрыть">✕</button>
                     </div>
                     <div id="chatMembers" class="member-list"></div>
                 </div>

@@ -184,7 +184,7 @@ class AssetUploadIn(BaseModel):
     kind: str
 
 VALID_SETTING_VALUES = {
-    "allow_friend_requests": {"everyone", "nobody"},
+    "allow_friend_requests": {"everyone", "friends", "nobody"},
     "allow_calls_from": {"everyone", "friends", "nobody"},
     "allow_group_invites": {"everyone", "friends", "nobody"},
     "show_last_seen": {"everyone", "friends", "nobody"},
@@ -328,6 +328,14 @@ CREATE TABLE IF NOT EXISTS group_invites (
     FOREIGN KEY(inviter_id) REFERENCES users(id) ON DELETE CASCADE,
     FOREIGN KEY(invitee_id) REFERENCES users(id) ON DELETE CASCADE
 );
+CREATE TABLE IF NOT EXISTS message_reads (
+    message_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    read_at TEXT NOT NULL,
+    PRIMARY KEY (message_id, user_id),
+    FOREIGN KEY(message_id) REFERENCES messages(id) ON DELETE CASCADE,
+    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+);
         """)
     conn.close()
 
@@ -419,6 +427,7 @@ def can_invite_to_group(conn: sqlite3.Connection, inviter_id: int, target_id: in
     return True, ""
 
 def serialize_message(row: sqlite3.Row) -> dict:
+    keys = row.keys()
     return {
         "id": row["id"],
         "chat_id": row["chat_id"],
@@ -432,6 +441,7 @@ def serialize_message(row: sqlite3.Row) -> dict:
         "file_name": row["file_name"],
         "mime_type": row["mime_type"],
         "created_at": row["created_at"],
+        "read_count": row["read_count"] if "read_count" in keys else 0,
     }
 
 async def push_to_user(user_id: int, payload: dict):
@@ -454,7 +464,7 @@ async def broadcast_to_chat(chat_id: int, payload: dict):
 
 @app.on_event("startup")
 def startup():
-    init_db()
+    pass  # init_db() already called at module level
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
@@ -811,11 +821,11 @@ async def send_friend_request(data: FriendRequestIn, user=Depends(get_current_us
     if target_settings["allow_friend_requests"] == "nobody":
         conn.close()
         raise HTTPException(status_code=403, detail="Пользователь запретил заявки в друзья")
+    existing_friend = conn.execute("SELECT 1 FROM friends WHERE user_id = ? AND friend_id = ?", (user["id"], target["id"])).fetchone()
+    if existing_friend:
+        conn.close()
+        return {"ok": True, "message": "Уже в друзьях"}
     with db_lock, conn:
-        existing_friend = conn.execute("SELECT 1 FROM friends WHERE user_id = ? AND friend_id = ?", (user["id"], target["id"])).fetchone()
-        if existing_friend:
-            conn.close()
-            return {"ok": True, "message": "Уже в друзьях"}
         conn.execute("INSERT OR IGNORE INTO friend_requests(from_user_id, to_user_id, status, created_at) VALUES (?, ?, 'pending', ?)", (user["id"], target["id"], now_iso()))
     req = conn.execute("SELECT fr.id, u.username, u.nickname, u.avatar FROM friend_requests fr JOIN users u ON u.id = fr.from_user_id WHERE fr.from_user_id = ? AND fr.to_user_id = ? AND fr.status = 'pending'", (user["id"], target["id"])).fetchone()
     conn.close()
@@ -1223,7 +1233,14 @@ async def chat_messages(chat_id: int, limit: int = 100, user=Depends(get_current
         conn.close()
         raise HTTPException(status_code=403, detail="Нет доступа")
     limit = min(max(limit, 1), 200)
-    rows = conn.execute("SELECT m.*, u.username, u.nickname, u.avatar FROM messages m JOIN users u ON u.id = m.user_id WHERE m.chat_id = ? AND NOT EXISTS (SELECT 1 FROM message_deleted_for d WHERE d.message_id = m.id AND d.user_id = ?) ORDER BY m.id DESC LIMIT ?", (chat_id, user["id"], limit)).fetchall()
+    rows = conn.execute(
+        "SELECT m.*, u.username, u.nickname, u.avatar, "
+        "(SELECT COUNT(DISTINCT r.user_id) FROM message_reads r WHERE r.message_id = m.id AND r.user_id != m.user_id) as read_count "
+        "FROM messages m JOIN users u ON u.id = m.user_id "
+        "WHERE m.chat_id = ? AND NOT EXISTS (SELECT 1 FROM message_deleted_for d WHERE d.message_id = m.id AND d.user_id = ?) "
+        "ORDER BY m.id DESC LIMIT ?",
+        (chat_id, user["id"], limit)
+    ).fetchall()
     conn.close()
     return [serialize_message(r) for r in reversed(rows)]
 
@@ -1318,6 +1335,32 @@ async def delete_message(message_id: int, mode: str = "me", user=Depends(get_cur
         conn.execute("DELETE FROM messages WHERE id = ?", (message_id,))
     conn.close()
     await broadcast_to_chat(chat_id, {"type": "message:deleted_all", "payload": {"chat_id": chat_id, "message_id": message_id}})
+    return {"ok": True}
+
+@app.post("/api/chats/{chat_id}/read")
+async def mark_read(chat_id: int, user=Depends(get_current_user)):
+    conn = get_db()
+    if not can_access_chat(conn, user["id"], chat_id):
+        conn.close()
+        raise HTTPException(status_code=403, detail="Нет доступа")
+    last = conn.execute(
+        "SELECT id FROM messages WHERE chat_id = ? AND user_id != ? ORDER BY id DESC LIMIT 1",
+        (chat_id, user["id"]),
+    ).fetchone()
+    if not last:
+        conn.close()
+        return {"ok": True}
+    with db_lock, conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO message_reads(message_id, user_id, read_at) "
+            "SELECT m.id, ?, ? FROM messages m WHERE m.chat_id = ? AND m.user_id != ?",
+            (user["id"], now_iso(), chat_id, user["id"]),
+        )
+    conn.close()
+    await broadcast_to_chat(chat_id, {
+        "type": "message:read",
+        "payload": {"chat_id": chat_id, "reader_id": user["id"], "up_to_id": last["id"]},
+    })
     return {"ok": True}
 
 @app.websocket("/ws")
