@@ -8,7 +8,7 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <title>LAN Messenger</title>
     <!-- Обновленный параметр кэша ?v=... для CSS и JS -->
-    <link rel="stylesheet" href="/static/style.css?v=20260320c">
+    <link rel="stylesheet" href="/static/style.css?v=20260320d">
     <meta http-equiv="Permissions-Policy" content="camera=(self), microphone=(self), display-capture=(self)">
 </head>
 <body>
@@ -213,6 +213,10 @@
                 <button id="btnMinimizeCall" class="ghost" title="Свернуть">↙</button>
             </div>
 
+            <div id="callAudioBanner" class="call-audio-banner hidden">
+                🔇 Нажмите здесь, чтобы включить звук
+            </div>
+
             <div id="callGrid" class="call-grid"></div>
 
             <div class="call-actions">
@@ -326,6 +330,6 @@
     </dialog>
 
     <!-- Обновленный параметр кэша ?v=... для CSS и JS -->
-    <script src="/static/app.js?v=20260320c"></script>
+    <script src="/static/app.js?v=20260320d"></script>
 </body>
 </html>

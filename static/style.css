@@ -1199,6 +1199,22 @@ img.avatar {
   -webkit-backdrop-filter: blur(4px);
 }
 
+.call-audio-banner {
+  width: 100%;
+  padding: 10px 16px;
+  background: rgba(255, 180, 0, 0.18);
+  border: 1px solid rgba(255, 180, 0, 0.4);
+  border-radius: 12px;
+  color: #ffe085;
+  font-size: 14px;
+  font-weight: 600;
+  text-align: center;
+  cursor: pointer;
+  margin-bottom: 10px;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
 .call-actions {
   display: flex;
   flex-wrap: wrap;

@@ -1272,7 +1272,8 @@ async function applyAudioMode(mode) {
     state.devicePrefs.audioMode = mode || "speaker";
     const audioSession = navigator.audioSession;
     if (audioSession && "type" in audioSession) {
-        try { audioSession.type = mode === "phone" ? "play-and-record" : "playback"; } catch (_) {}
+        // Всегда "play-and-record" во время звонка — иначе iOS отключает микрофон
+        try { audioSession.type = state.call.active ? "play-and-record" : "auto"; } catch (_) {}
     }
     if (!state.call.active) return;
     if (isLikelyIOS && isLikelySafari && !("setSinkId" in HTMLMediaElement.prototype)) {
@@ -1429,12 +1430,18 @@ function resetCallState() {
 
     hide(qs("callOverlay"));
     hide(qs("btnCallRestore"));
+    hideCallAudioBanner();
     const callGrid = qs("callGrid");
     if (callGrid) callGrid.innerHTML = "";
     const label = qs("callTitleLabel");
     if (label) label.textContent = "Звонок";
     updateCallButtons();
     state.ui.callMinimized = false;
+    // Сбросить audio session после завершения звонка
+    const audioSession = navigator.audioSession;
+    if (audioSession && "type" in audioSession) {
+        try { audioSession.type = "auto"; } catch (_) {}
+    }
 }
 
 function resetCallPeersForRejoin() {
@@ -1584,41 +1591,50 @@ function updateCallButtons() {
     }
 }
 
+async function unlockWebAudio() {
+    // Разблокировка Web Audio API — вызывать только из обработчика пользовательского жеста
+    try {
+        const ac = new (window.AudioContext || window.webkitAudioContext)();
+        await ac.resume();
+        ac.close().catch(() => {});
+    } catch (_) {}
+    // Установить правильный режим аудиосессии
+    const audioSession = navigator.audioSession;
+    if (audioSession && "type" in audioSession) {
+        try { audioSession.type = "play-and-record"; } catch (_) {}
+    }
+}
+
 async function safePlay(mediaEl) {
     if (!mediaEl) return;
     try {
         await mediaEl.play();
-    } catch (e) {
-        // iOS/Android blocks autoplay with audio — try muted first
-        if (!mediaEl.muted) {
-            mediaEl.muted = true;
-            try {
-                await mediaEl.play();
-                // Show unmute button on the tile
-                showUnmuteOverlay(mediaEl);
-            } catch (e2) {
-                console.warn("Autoplay blocked even muted:", e2);
-                showPlayOverlay(mediaEl);
-            }
-        } else {
-            showPlayOverlay(mediaEl);
-        }
+        return; // успешно
+    } catch (_) {}
+
+    // Автовоспроизведение заблокировано. Пробуем мьютированный вариант
+    if (!mediaEl.muted) {
+        mediaEl.muted = true;
+        try {
+            await mediaEl.play();
+            // Видео воспроизводится (без звука) — показываем глобальный баннер
+            showCallAudioBanner();
+            return;
+        } catch (_) {}
     }
+
+    // Не удалось воспроизвести даже мьютированным — показываем оверлей на тайле
+    showPlayOverlay(mediaEl);
 }
 
-function showUnmuteOverlay(mediaEl) {
-    const parent = mediaEl.parentElement;
-    if (!parent || parent.querySelector(".call-unmute")) return;
-    const btn = document.createElement("button");
-    btn.className = "call-unmute";
-    btn.textContent = "🔇 Нажмите для включения звука";
-    btn.onclick = async (e) => {
-        e.stopPropagation();
-        mediaEl.muted = false;
-        btn.remove();
-        try { await mediaEl.play(); } catch (_) {}
-    };
-    parent.appendChild(btn);
+function showCallAudioBanner() {
+    const banner = qs("callAudioBanner");
+    if (banner) show(banner);
+}
+
+function hideCallAudioBanner() {
+    const banner = qs("callAudioBanner");
+    if (banner) hide(banner);
 }
 
 function showPlayOverlay(mediaEl) {
@@ -1626,28 +1642,34 @@ function showPlayOverlay(mediaEl) {
     if (!parent || parent.querySelector(".call-unmute")) return;
     const btn = document.createElement("button");
     btn.className = "call-unmute";
-    btn.textContent = "▶ Нажмите для просмотра";
+    btn.textContent = "▶ Нажмите для воспроизведения";
     btn.onclick = async (e) => {
         e.stopPropagation();
         mediaEl.muted = false;
         btn.remove();
         try { await mediaEl.play(); } catch (_) {}
+        hideCallAudioBanner();
     };
     parent.appendChild(btn);
 }
 
-// Unlock all paused/muted remote video elements on any user tap
-document.addEventListener("click", () => {
+function unmuteAllRemoteVideos() {
     for (const [uid, card] of state.call.tiles) {
         if (uid === state.me?.id) continue;
-        if (card.video && card.video.srcObject) {
-            const overlay = card.tile?.querySelector(".call-unmute");
-            if (overlay) {
-                card.video.muted = false;
-                overlay.remove();
-            }
-            if (card.video.paused) card.video.play().catch(() => {});
-        }
+        if (!card.video || !card.video.srcObject) continue;
+        card.video.muted = false;
+        card.tile?.querySelectorAll(".call-unmute").forEach(el => el.remove());
+        if (card.video.paused) card.video.play().catch(() => {});
+    }
+    hideCallAudioBanner();
+}
+
+// Автоматическая разблокировка при любом клике внутри звонка
+document.addEventListener("click", (ev) => {
+    if (!state.call.active) return;
+    const overlay = qs("callOverlay");
+    if (overlay && overlay.contains(ev.target)) {
+        unmuteAllRemoteVideos();
     }
 }, { passive: true });
 
@@ -1856,6 +1878,9 @@ async function startCall() {
         alert("Соединение восстанавливается. Попробуйте начать звонок через 1-2 секунды.");
         return;
     }
+
+    // Разблокировать Web Audio и установить audio session "play-and-record" из жеста пользователя
+    await unlockWebAudio();
 
     try {
         let iceServers = [
@@ -2526,6 +2551,9 @@ function bindUi() {
     if (qs("btnShowMembers"))  qs("btnShowMembers").onclick  = openMembersSheet;
     if (qs("btnCloseMembers")) qs("btnCloseMembers").onclick = closeMembersSheet;
     if (qs("membersBackdrop")) qs("membersBackdrop").onclick = closeMembersSheet;
+
+    // ─ Баннер включения звука ────────────────────────────────
+    if (qs("callAudioBanner")) qs("callAudioBanner").onclick = () => unmuteAllRemoteVideos();
 }
 
 // ════════════════════════════════════════════════════════════
