@@ -56,6 +56,8 @@ if not logger.handlers:
 
 pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 db_lock = threading.Lock()
+
+# Хранилища состояния WebSocket
 active_connections: dict[int, set[WebSocket]] = {}
 call_rooms: dict[int, dict[int, WebSocket]] = {}
 call_states: dict[int, dict[int, dict]] = {}
@@ -75,11 +77,9 @@ def _build_ice_servers() -> list[dict]:
                 servers = []
                 for idx, item in enumerate(parsed):
                     if not isinstance(item, dict):
-                        logger.warning("RTC_ICE_SERVERS[%s] skipped: item is not object", idx)
                         continue
                     urls = item.get("urls")
                     if not urls:
-                        logger.warning("RTC_ICE_SERVERS[%s] skipped: missing urls", idx)
                         continue
                     out = {"urls": urls}
                     if item.get("username"):
@@ -89,7 +89,6 @@ def _build_ice_servers() -> list[dict]:
                     servers.append(out)
                 if servers:
                     return servers
-            logger.warning("RTC_ICE_SERVERS provided, but no valid entries found; using fallback")
         except Exception as exc:
             logger.warning("RTC_ICE_SERVERS parse failed: %s; using fallback", exc)
     
@@ -179,9 +178,6 @@ class SettingsIn(BaseModel):
 class PasswordChangeIn(BaseModel):
     old_password: str
     new_password: str
-
-class AssetUploadIn(BaseModel):
-    kind: str
 
 VALID_SETTING_VALUES = {
     "allow_friend_requests": {"everyone", "friends", "nobody"},
@@ -360,9 +356,6 @@ def get_current_user(request: Request) -> sqlite3.Row:
         raise HTTPException(status_code=401, detail="Invalid token")
     return user
 
-def require_gate(request: Request):
-    return
-
 def ensure_settings(conn: sqlite3.Connection, user_id: int):
     conn.execute(
         "INSERT OR IGNORE INTO user_settings(user_id, allow_friend_requests, allow_calls_from, allow_group_invites, show_last_seen) VALUES (?, 'everyone', 'friends', 'friends', 'friends')",
@@ -462,41 +455,15 @@ async def broadcast_to_chat(chat_id: int, payload: dict):
     for m in members:
         await push_to_user(m["user_id"], payload)
 
-@app.on_event("startup")
-def startup():
-    pass  # init_db() already called at module level
-
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
     response = templates.TemplateResponse("index.html", {"request": request})
-    # Добавляем заголовки Permissions-Policy для WebRTC
     response.headers["Permissions-Policy"] = "camera=(self), microphone=(self), display-capture=(self)"
     return response
 
 @app.get("/api/rtc-config")
 async def rtc_config():
     return {"ice_servers": ICE_SERVERS, "ice_policy": "all"}
-
-@app.get("/api/health/webrtc")
-async def webrtc_health():
-    has_turn = any(str(s.get("urls", "")).startswith("turn:") for s in ICE_SERVERS if isinstance(s, dict))
-    masked = []
-    for s in ICE_SERVERS:
-        if not isinstance(s, dict):
-            continue
-        item = {"urls": s.get("urls")}
-        if s.get("username"):
-            item["username"] = "***"
-        if s.get("credential"):
-            item["credential"] = "***"
-        masked.append(item)
-    return {
-        "ok": True,
-        "turn_configured": has_turn,
-        "ice_servers_count": len(masked),
-        "ice_servers": masked,
-        "warning": None if has_turn else "TURN not configured: calls may fail across different networks/NAT.",
-    }
 
 @app.get("/media/{file_name}")
 async def media_file(file_name: str, request: Request, token: str = ""):
@@ -520,17 +487,12 @@ async def media_file(file_name: str, request: Request, token: str = ""):
     response.headers["Permissions-Policy"] = "camera=(self), microphone=(self), display-capture=(self)"
     return response
 
-@app.get("/api/gate/status")
-async def gate_status(request: Request):
-    return {"ok": True}
-
 @app.post("/api/gate")
 async def gate(data: GateIn):
     return JSONResponse({"ok": True})
 
 @app.post("/api/register")
 async def register(data: RegisterIn, request: Request):
-    require_gate(request)
     username = data.username.strip().lower()
     nickname = data.nickname.strip()
     if len(username) < 3 or len(username) > 32:
@@ -563,7 +525,6 @@ async def register(data: RegisterIn, request: Request):
 
 @app.post("/api/login")
 async def login(data: LoginIn, request: Request):
-    require_gate(request)
     conn = get_db()
     user = conn.execute("SELECT * FROM users WHERE username = ?", (data.username.strip().lower(),)).fetchone()
     if not user or not verify_password(data.password, user["password_hash"]):
@@ -1376,7 +1337,12 @@ async def ws_endpoint(ws: WebSocket):
     try:
         await ws.send_json({"type": "hello", "payload": {"user_id": user_id}})
         while True:
-            msg = await ws.receive_json()
+            try:
+                msg = await ws.receive_json()
+            except Exception:
+                # Обрыв соединения или некорректный JSON - прерываем цикл WS для этого клиента
+                break
+                
             msg_type = msg.get("type")
             if msg_type == "ping":
                 await ws.send_json({"type": "pong"})
@@ -1387,22 +1353,18 @@ async def ws_endpoint(ws: WebSocket):
                 chat = get_chat(conn, chat_id)
                 if not chat or not can_access_chat(conn, user_id, chat_id):
                     conn.close()
-                    _call_dbg(chat_id, "join_denied", user_id=user_id)
                     continue
                 if chat["type"] == "direct":
                     peer = get_direct_peer(conn, chat_id, user_id)
                     if not peer:
                         conn.close()
-                        _call_dbg(chat_id, "join_no_peer", user_id=user_id)
                         continue
                     allowed, _ = can_call_user(conn, user_id, peer["id"])
                     if not allowed:
                         conn.close()
-                        _call_dbg(chat_id, "join_not_allowed", user_id=user_id, peer_id=peer["id"])
                         continue
                 room = call_rooms.setdefault(chat_id, {})
                 was_empty = len(room) == 0
-                previous_ws = room.get(user_id)
                 room[user_id] = ws
                 state = {
                     "mic": bool(msg.get("mic", True)),
@@ -1414,7 +1376,6 @@ async def ws_endpoint(ws: WebSocket):
                 states = call_states.get(chat_id, {})
                 member_rows = conn.execute("SELECT user_id FROM chat_members WHERE chat_id = ?", (chat_id,)).fetchall()
                 conn.close()
-                _call_dbg(chat_id, "join", user_id=user_id, was_empty=was_empty, replaced_socket=previous_ws is not None and previous_ws is not ws)
                 if was_empty:
                     for m in member_rows:
                         uid = m["user_id"]
@@ -1424,7 +1385,10 @@ async def ws_endpoint(ws: WebSocket):
                 await ws.send_json({"type": "call:participants", "payload": {"chat_id": chat_id, "users": others, "states": states}})
                 for uid, peer_ws in room.items():
                     if uid != user_id:
-                        await peer_ws.send_json({"type": "call:user_joined", "payload": {"chat_id": chat_id, "user_id": user_id, "state": state}})
+                        try:
+                            await peer_ws.send_json({"type": "call:user_joined", "payload": {"chat_id": chat_id, "user_id": user_id, "state": state}})
+                        except Exception:
+                            pass
                 continue
             if msg_type == "call:leave":
                 chat_id = int(msg.get("chat_id", 0))
@@ -1432,9 +1396,11 @@ async def ws_endpoint(ws: WebSocket):
                 if room.get(user_id) is ws:
                     room.pop(user_id, None)
                     call_states.get(chat_id, {}).pop(user_id, None)
-                    _call_dbg(chat_id, "leave", user_id=user_id)
                     for peer_ws in room.values():
-                        await peer_ws.send_json({"type": "call:user_left", "payload": {"chat_id": chat_id, "user_id": user_id}})
+                        try:
+                            await peer_ws.send_json({"type": "call:user_left", "payload": {"chat_id": chat_id, "user_id": user_id}})
+                        except Exception:
+                            pass
                     if not room:
                         call_rooms.pop(chat_id, None)
                         call_states.pop(chat_id, None)
@@ -1443,7 +1409,6 @@ async def ws_endpoint(ws: WebSocket):
                 chat_id = int(msg.get("chat_id", 0))
                 room = call_rooms.get(chat_id, {})
                 if room.get(user_id) is not ws:
-                    _call_dbg(chat_id, "state_ignored_stale_ws", user_id=user_id)
                     continue
                 state = {
                     "mic": bool(msg.get("mic", True)),
@@ -1451,37 +1416,39 @@ async def ws_endpoint(ws: WebSocket):
                     "screen": bool(msg.get("screen", False)),
                 }
                 call_states.setdefault(chat_id, {})[user_id] = state
-                _call_dbg(chat_id, "state", user_id=user_id, mic=state["mic"], cam=state["cam"], screen=state["screen"])
                 for uid, peer_ws in room.items():
                     if uid != user_id:
-                        await peer_ws.send_json({"type": "call:user_state", "payload": {"chat_id": chat_id, "user_id": user_id, "state": state}})
+                        try:
+                            await peer_ws.send_json({"type": "call:user_state", "payload": {"chat_id": chat_id, "user_id": user_id, "state": state}})
+                        except Exception:
+                            pass
                 continue
             if msg_type == "call:signal":
                 chat_id = int(msg.get("chat_id", 0))
                 to_user = int(msg.get("to_user", 0))
                 room = call_rooms.get(chat_id, {})
                 if room.get(user_id) is not ws:
-                    _call_dbg(chat_id, "signal_ignored_stale_ws", user_id=user_id, to_user=to_user)
                     continue
                 target_ws = room.get(to_user)
                 if target_ws:
                     signal = msg.get("signal") or {}
-                    _call_dbg(chat_id, "signal_forward", user_id=user_id, to_user=to_user, signal_type=signal.get("type"))
-                    await target_ws.send_json({"type": "call:signal", "payload": {"chat_id": chat_id, "from_user": user_id, "signal": signal}})
-                else:
-                    _call_dbg(chat_id, "signal_no_target", user_id=user_id, to_user=to_user)
+                    try:
+                        await target_ws.send_json({"type": "call:signal", "payload": {"chat_id": chat_id, "from_user": user_id, "signal": signal}})
+                    except Exception:
+                        pass
                 continue
     except WebSocketDisconnect:
         pass
+    except Exception as err:
+        logger.error(f"WebSocket unhandled loop error: {err}")
     finally:
         active_connections.get(user_id, set()).discard(ws)
         for chat_id in list(call_rooms.keys()):
-            room = call_rooms[chat_id]
+            room = call_rooms.get(chat_id, {})
             if room.get(user_id) is ws:
-                _call_dbg(chat_id, "disconnect_cleanup", user_id=user_id)
                 room.pop(user_id, None)
                 call_states.get(chat_id, {}).pop(user_id, None)
-                for peer_ws in room.values():
+                for peer_ws in list(room.values()):
                     try:
                         await peer_ws.send_json({"type": "call:user_left", "payload": {"chat_id": chat_id, "user_id": user_id}})
                     except Exception:

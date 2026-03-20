@@ -915,6 +915,7 @@ button.success {
   align-items: flex-end;
   gap: 8px;
   max-width: min(82%, 680px);
+  position: relative;
 }
 
 .message.mine {
@@ -930,6 +931,7 @@ button.success {
   background:
     linear-gradient(180deg, rgba(19, 31, 46, 0.96) 0%, rgba(16, 27, 39, 0.96) 100%);
   box-shadow: 0 14px 28px rgba(6, 15, 27, 0.22);
+  position: relative;
 }
 
 .message.mine .message-bubble {
@@ -1006,30 +1008,6 @@ button.success {
   background: rgba(255, 255, 255, 0.06);
   color: inherit;
   text-decoration: none;
-}
-
-.message-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 10px;
-  opacity: 0;
-  transform: translateY(4px);
-  transition: opacity 0.18s ease, transform 0.18s ease;
-}
-
-.message:hover .message-actions,
-.message:focus-within .message-actions {
-  opacity: 1;
-  transform: translateY(0);
-}
-
-.message-actions button {
-  min-height: 34px;
-  padding: 8px 10px;
-  font-size: 12px !important;
-  border-radius: 12px;
-  box-shadow: none;
 }
 
 .composer {
@@ -1295,13 +1273,6 @@ dialog h4 {
   width: 100%;
 }
 
-@media (hover: none) {
-  .message-actions {
-    opacity: 1;
-    transform: none;
-  }
-}
-
 @media (max-width: 1180px) {
   #app {
     grid-template-columns: 72px minmax(250px, 300px) minmax(0, 1fr);
@@ -1531,7 +1502,6 @@ dialog h4 {
   }
 }
 
-/* ─── Read receipts / delivery status ─── */
 .msg-status {
   font-size: 11px;
   color: var(--text-dim);
@@ -1542,12 +1512,6 @@ dialog h4 {
   color: var(--line-accent-strong);
 }
 
-/* ─── Message actions: compact ─── */
-.message-actions button {
-  font-size: 12px !important;
-}
-
-/* ─── Fix DM action buttons layout ─── */
 .actions {
   flex-wrap: wrap;
 }
@@ -1555,7 +1519,6 @@ dialog h4 {
   flex: 0 0 auto;
 }
 
-/* ─── Group members head: flex row with close btn ─── */
 .group-members-head {
   display: flex;
   align-items: flex-start;
@@ -1577,14 +1540,11 @@ dialog h4 {
   font-size: 16px !important;
 }
 
-/* ─── Members backdrop (mobile only) ─── */
 .members-backdrop {
   display: none;
 }
 
-/* ─── Members bottom-sheet on mobile ─── */
 @media (max-width: 980px) {
-  /* Backdrop dim */
   .members-backdrop {
     display: block;
     position: fixed;
@@ -1602,11 +1562,9 @@ dialog h4 {
     pointer-events: auto;
   }
 
-  /* Bottom sheet */
   .group-members.members-modal-open {
     display: flex !important;
     position: fixed;
-    /* Не перекрываем верхнюю часть экрана — лист занимает 72% высоты снизу */
     left: 0;
     right: 0;
     bottom: 0;
@@ -1619,7 +1577,6 @@ dialog h4 {
     padding: 8px 14px calc(80px + var(--safe-bottom));
     background: linear-gradient(180deg, rgba(14,24,36,0.99) 0%, rgba(9,16,26,0.99) 100%);
     box-shadow: 0 -18px 50px rgba(2,8,18,0.55);
-    /* Плавное появление снизу */
     transform: translateY(100%);
     transition: transform 0.3s cubic-bezier(0.32, 0.72, 0, 1);
   }
@@ -1631,7 +1588,6 @@ dialog h4 {
     flex: none;
   }
 
-  /* Ручка сверху (drag-handle) */
   .group-members.members-modal-open::before {
     content: "";
     display: block;
@@ -1643,13 +1599,86 @@ dialog h4 {
     flex: none;
   }
 
-  /* Показываем кнопку закрытия */
   .members-close-btn {
     display: inline-flex;
   }
 
-  /* Кнопка 👥 всегда видна для группы на мобилках */
   #btnShowMembers {
     display: inline-flex !important;
+  }
+}
+
+.msg-ctx-menu {
+  min-width: 190px;
+  padding: 6px;
+  border-radius: 16px;
+  background: linear-gradient(180deg, rgba(20,34,50,0.98) 0%, rgba(13,22,34,0.98) 100%);
+  border: 1px solid rgba(145,181,223,0.18);
+  box-shadow: 0 20px 50px rgba(2,8,18,0.55);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.msg-ctx-menu button {
+  width: 100%;
+  text-align: left;
+  justify-content: flex-start;
+  border-radius: 10px;
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+  font-size: 14px !important;
+  font-weight: 600;
+  color: var(--text);
+  padding: 9px 12px;
+}
+.msg-ctx-menu button:hover {
+  background: rgba(94,168,255,0.1);
+  border-color: transparent;
+  box-shadow: none;
+}
+.msg-ctx-menu button.danger,
+.msg-ctx-menu button:last-child {
+  color: var(--danger);
+}
+
+/* ─── Фикс скрытия участников в ЛС ─── */
+.group-members.hidden {
+  display: none !important;
+}
+
+/* ─── Кнопка контекстного меню сообщения (Три точки) ─── */
+.msg-menu-btn {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  right: -32px;
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  color: var(--text-dim) !important;
+  font-size: 18px !important;
+  padding: 4px 8px !important;
+  opacity: 0;
+  cursor: pointer;
+  transition: opacity 0.2s ease, color 0.2s ease;
+}
+.message.mine .msg-menu-btn {
+  right: auto;
+  left: -32px;
+}
+.message:hover .msg-menu-btn,
+.msg-menu-btn:focus,
+.msg-menu-btn:active {
+  opacity: 1;
+  color: var(--line-accent-strong) !important;
+}
+
+/* На мобильных устройствах три точки видны всегда, но полупрозрачны */
+@media (hover: none) {
+  .msg-menu-btn {
+    opacity: 0.6;
   }
 }
