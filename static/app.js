@@ -1586,8 +1586,70 @@ function updateCallButtons() {
 
 async function safePlay(mediaEl) {
     if (!mediaEl) return;
-    try { await mediaEl.play(); } catch (e) { console.warn("Autoplay blocked:", e); }
+    try {
+        await mediaEl.play();
+    } catch (e) {
+        // iOS/Android blocks autoplay with audio — try muted first
+        if (!mediaEl.muted) {
+            mediaEl.muted = true;
+            try {
+                await mediaEl.play();
+                // Show unmute button on the tile
+                showUnmuteOverlay(mediaEl);
+            } catch (e2) {
+                console.warn("Autoplay blocked even muted:", e2);
+                showPlayOverlay(mediaEl);
+            }
+        } else {
+            showPlayOverlay(mediaEl);
+        }
+    }
 }
+
+function showUnmuteOverlay(mediaEl) {
+    const parent = mediaEl.parentElement;
+    if (!parent || parent.querySelector(".call-unmute")) return;
+    const btn = document.createElement("button");
+    btn.className = "call-unmute";
+    btn.textContent = "🔇 Нажмите для включения звука";
+    btn.onclick = async (e) => {
+        e.stopPropagation();
+        mediaEl.muted = false;
+        btn.remove();
+        try { await mediaEl.play(); } catch (_) {}
+    };
+    parent.appendChild(btn);
+}
+
+function showPlayOverlay(mediaEl) {
+    const parent = mediaEl.parentElement;
+    if (!parent || parent.querySelector(".call-unmute")) return;
+    const btn = document.createElement("button");
+    btn.className = "call-unmute";
+    btn.textContent = "▶ Нажмите для просмотра";
+    btn.onclick = async (e) => {
+        e.stopPropagation();
+        mediaEl.muted = false;
+        btn.remove();
+        try { await mediaEl.play(); } catch (_) {}
+    };
+    parent.appendChild(btn);
+}
+
+// Unlock all paused/muted remote video elements on any user tap
+document.addEventListener("click", () => {
+    for (const [uid, card] of state.call.tiles) {
+        if (uid === state.me?.id) continue;
+        if (card.video && card.video.srcObject) {
+            const overlay = card.tile?.querySelector(".call-unmute");
+            if (overlay) {
+                card.video.muted = false;
+                overlay.remove();
+            }
+            if (card.video.paused) card.video.play().catch(() => {});
+        }
+    }
+}, { passive: true });
 
 function ensureCallTile(userId, isLocal = false) {
     userId = Number(userId);
@@ -1749,7 +1811,9 @@ async function handleSignal(fromUser, signal) {
             }
             pc._pendingCandidates = [];
 
-            await pc.setLocalDescription();
+            // Явный createAnswer() — Safari не поддерживает setLocalDescription() без аргументов
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
             if (state.ws?.readyState === WebSocket.OPEN) {
                 state.ws.send(JSON.stringify({
                     type: "call:signal", chat_id: state.call.chatId,
