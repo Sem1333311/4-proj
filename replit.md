@@ -18,5 +18,7 @@ A LAN Messenger web application built with Python FastAPI. Features include user
 - `requirements.txt` - Python dependencies
 
 ## Running
-- The app runs via `python app.py` which starts uvicorn on port 5000
-- PORT is configured via environment variable (set to 5000)
+- The app runs via `python app.py` which starts uvicorn on host `0.0.0.0` and port `8000` by default
+- You can override the port with the `PORT` environment variable
+- For local network access from a phone or another device on the same Wi-Fi, run `.\start_lan.bat` or `powershell -ExecutionPolicy Bypass -File .\start_lan.ps1`
+- Open the address shown in the console, for example `http://192.168.x.x:8000`

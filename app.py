@@ -5,7 +5,9 @@ import base64
 import hashlib
 import logging
 import secrets
+import socket
 import sqlite3
+import subprocess
 import threading
 import uuid
 from datetime import datetime
@@ -114,6 +116,75 @@ def _build_ice_servers() -> list[dict]:
     return servers
 
 ICE_SERVERS = _build_ice_servers()
+
+def _detect_windows_lan_ip() -> Optional[str]:
+    command = [
+        "powershell",
+        "-NoProfile",
+        "-Command",
+        (
+            '$blockedInterfaces = "Loopback|Bluetooth|Virtual|vEthernet|WSL|Hyper-V|Docker|Tailscale|singbox|ZeroTier|VMware|VirtualBox"; '
+            "Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | "
+            "Where-Object { "
+            "$_.IPAddress -notlike '127.*' -and "
+            "$_.IPAddress -notlike '169.254.*' -and "
+            "$_.PrefixOrigin -ne 'WellKnown' -and "
+            "$_.InterfaceAlias -notmatch $blockedInterfaces "
+            "} | "
+            "Select-Object -ExpandProperty IPAddress -First 1"
+        ),
+    ]
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=3, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+    for line in (result.stdout or "").splitlines():
+        ip = line.strip()
+        if ip:
+            return ip
+    return None
+
+def _detect_primary_lan_ip() -> Optional[str]:
+    if os.name == "nt":
+        windows_ip = _detect_windows_lan_ip()
+        if windows_ip:
+            return windows_ip
+
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+            probe.connect(("8.8.8.8", 80))
+            ip = probe.getsockname()[0]
+            if ip and not ip.startswith(("127.", "169.254.")):
+                return ip
+    except OSError:
+        pass
+
+    try:
+        for _, _, _, _, sockaddr in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            ip = sockaddr[0]
+            if ip and not ip.startswith(("127.", "169.254.")):
+                return ip
+    except OSError:
+        pass
+
+    return None
+
+def _log_access_urls(host: str, port: int) -> None:
+    logger.info("LAN Messenger starting on %s:%s", host, port)
+    logger.info("Open on this computer: http://127.0.0.1:%s", port)
+
+    if host in {"0.0.0.0", "::"}:
+        lan_ip = _detect_primary_lan_ip()
+        if lan_ip:
+            logger.info("Open from phone on the same Wi-Fi: http://%s:%s", lan_ip, port)
+        else:
+            logger.info("LAN IP was not detected automatically. Use this computer's IPv4 address with port %s.", port)
+        logger.info("If another device cannot connect, allow inbound TCP port %s in Windows Firewall.", port)
+        return
+
+    if host not in {"127.0.0.1", "localhost"}:
+        logger.info("Open from other devices with: http://%s:%s", host, port)
 
 def _build_file_fernet() -> Fernet:
     raw = os.getenv("FILE_ENCRYPTION_KEY", "").strip()
@@ -1461,4 +1532,5 @@ if __name__ == "__main__":
     import uvicorn
     host = os.getenv("HOST", "0.0.0.0")
     port = int(os.getenv("PORT", "8000"))
+    _log_access_urls(host, port)
     uvicorn.run("app:app", host=host, port=port, reload=True)
