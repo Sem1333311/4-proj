@@ -5,4 +5,3 @@ node_modules/
 .replit
 replit.nix
 .upm/
-messenger.db
