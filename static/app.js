@@ -23,7 +23,7 @@ const state = {
         tiles: new Map(),
         remoteStreams: new Map(),
         iceServers: null,
-        pendingCandidates: new Map(), // Буфер ICE кандидатов
+        pendingCandidates: new Map(),
     },
     wsMeta: {
         reconnectTimer: null,
@@ -48,13 +48,19 @@ const state = {
     },
 };
 
-const isLikelyIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+const isLikelyIOS =
+    /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
 const isLikelyAndroid = /Android/.test(navigator.userAgent);
 const isMobile = isLikelyIOS || isLikelyAndroid;
-const isLikelySafari = /^((?!chrome|android|crios|fxios).)*safari/i.test(navigator.userAgent);
-const isLocalDevHost = ["localhost", "127.0.0.1", "[::1]"].includes(location.hostname);
+const isLikelySafari = /^((?!chrome|android|crios|fxios).)*safari/i.test(
+    navigator.userAgent,
+);
+const isLocalDevHost = ["localhost", "127.0.0.1", "[::1]"].includes(
+    location.hostname,
+);
 
-// === АУДИО РАЗБЛОКИРОВКА (КРИТИЧНО ДЛЯ AUTPLAY) ===
+// ─── Разблокировка AudioContext (autoplay) ────────────────────────────────────
 let _audioCtxUnlocked = false;
 
 async function unlockAudioContext() {
@@ -74,14 +80,14 @@ async function unlockAudioContext() {
     }
 }
 
+// ─── Утилиты ──────────────────────────────────────────────────────────────────
+
 function qs(id) {
     return document.getElementById(id);
 }
-
 function show(el) {
     if (el) el.classList.remove("hidden");
 }
-
 function hide(el) {
     if (el) el.classList.add("hidden");
 }
@@ -117,7 +123,8 @@ function setChatOpen(open) {
     }
     const back = qs("btnBackToList");
     if (!back) return;
-    if (state.ui.chatOpen) show(back); else hide(back);
+    if (state.ui.chatOpen) show(back);
+    else hide(back);
 }
 
 function escapeHtml(v) {
@@ -134,10 +141,14 @@ function setError(id, text) {
 }
 
 function syncViewportHeight() {
-    const height = Math.round(window.visualViewport?.height || window.innerHeight || document.documentElement.clientHeight || 0);
-    if (height > 0) {
-        document.documentElement.style.setProperty("--app-height", `${height}px`);
-    }
+    const h = Math.round(
+        window.visualViewport?.height ||
+            window.innerHeight ||
+            document.documentElement.clientHeight ||
+            0,
+    );
+    if (h > 0)
+        document.documentElement.style.setProperty("--app-height", `${h}px`);
 }
 
 function installResponsiveEnvironment() {
@@ -165,7 +176,10 @@ function formatListTime(iso) {
     if (Number.isNaN(date.getTime())) return "";
     const now = new Date();
     if (date.toDateString() === now.toDateString()) {
-        return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+        return date.toLocaleTimeString([], {
+            hour: "2-digit",
+            minute: "2-digit",
+        });
     }
     return date.toLocaleDateString([], { day: "2-digit", month: "2-digit" });
 }
@@ -177,11 +191,17 @@ function fmtDuration(sec) {
 }
 
 function pickRecorderMime(kind) {
-    const options = kind === "audio"
-        ? ["audio/mp4", "audio/webm;codecs=opus", "audio/webm"]
-        : ["video/mp4", "video/webm;codecs=vp8,opus", "video/webm"];
+    const options =
+        kind === "audio"
+            ? ["audio/mp4", "audio/webm;codecs=opus", "audio/webm"]
+            : ["video/mp4", "video/webm;codecs=vp8,opus", "video/webm"];
     for (const m of options) {
-        if (window.MediaRecorder && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(m)) return m;
+        if (
+            window.MediaRecorder &&
+            MediaRecorder.isTypeSupported &&
+            MediaRecorder.isTypeSupported(m)
+        )
+            return m;
     }
     return "";
 }
@@ -193,26 +213,10 @@ function extForMime(mime, fallback) {
     return fallback;
 }
 
-async function safePlay(mediaEl) {
-    if (!mediaEl) return;
-    mediaEl.autoplay = true;
-    mediaEl.playsInline = true;
-    const wantMuted = mediaEl.muted;
-    mediaEl.muted = true;
-    try {
-        await mediaEl.play();
-    } catch (e) {
-        console.warn("safePlay failed:", e);
-        return;
-    }
-    mediaEl.muted = wantMuted;
-}
-
 async function api(path, opts = {}) {
     const headers = opts.headers || {};
-    if (!(opts.body instanceof FormData)) {
+    if (!(opts.body instanceof FormData))
         headers["Content-Type"] = "application/json";
-    }
     if (state.token) headers.Authorization = `Bearer ${state.token}`;
     const res = await fetch(path, { ...opts, headers });
     if (!res.ok) {
@@ -233,21 +237,24 @@ function peerNameById(id) {
 }
 
 function withMediaToken(url) {
-    if (!url) return url;
-    if (!state.token) return url;
+    if (!url || !state.token) return url;
     return `${url}${url.includes("?") ? "&" : "?"}token=${encodeURIComponent(state.token)}`;
 }
 
 function avatarMediaUrl(avatar) {
     if (!avatar) return "";
-    const fileName = String(avatar);
-    return withMediaToken(fileName.startsWith("/media/") ? fileName : `/media/${encodeURIComponent(fileName)}`);
+    const f = String(avatar);
+    return withMediaToken(
+        f.startsWith("/media/") ? f : `/media/${encodeURIComponent(f)}`,
+    );
 }
 
 function truncateText(text, limit = 96) {
     const clean = String(text || "").trim();
     if (!clean) return "";
-    return clean.length > limit ? `${clean.slice(0, limit).trimEnd()}...` : clean;
+    return clean.length > limit
+        ? `${clean.slice(0, limit).trimEnd()}...`
+        : clean;
 }
 
 function toMultilineHtml(text) {
@@ -257,9 +264,8 @@ function toMultilineHtml(text) {
 function seedHue(seed) {
     const source = String(seed || "lm");
     let hash = 0;
-    for (let i = 0; i < source.length; i += 1) {
+    for (let i = 0; i < source.length; i++)
         hash = (hash * 31 + source.charCodeAt(i)) % 360;
-    }
     return Math.abs(hash);
 }
 
@@ -267,7 +273,10 @@ function initialsFromLabel(label) {
     const clean = String(label || "").trim();
     if (!clean) return "LM";
     const parts = clean.split(/\s+/).filter(Boolean);
-    const letters = parts.slice(0, 2).map((part) => part[0]).join("");
+    const letters = parts
+        .slice(0, 2)
+        .map((p) => p[0])
+        .join("");
     return (letters || clean.slice(0, 2)).toUpperCase();
 }
 
@@ -275,19 +284,9 @@ function avatarMarkup({ avatar, label, seed, className = "avatar-md" }) {
     const classes = ["avatar", className].filter(Boolean).join(" ");
     const title = escapeHtml(label || "LM");
     const url = avatarMediaUrl(avatar);
-    if (url) {
+    if (url)
         return `<img class="${classes}" src="${url}" alt="${title}" loading="lazy">`;
-    }
     return `<div class="${classes}" style="--avatar-hue:${seedHue(seed || label || "lm")}">${escapeHtml(initialsFromLabel(label))}</div>`;
-}
-
-function describeMemberRole(role) {
-    const labels = {
-        owner: "Владелец",
-        admin: "Админ",
-        member: "Участник",
-    };
-    return labels[role] || role || "Участник";
 }
 
 function roleBadge(role) {
@@ -301,7 +300,7 @@ function myGroupRole() {
 }
 
 function chatTitleText(chat) {
-    return chat ? (chat.title || chat.peer?.nickname || "Чат") : "Выберите чат";
+    return chat ? chat.title || chat.peer?.nickname || "Чат" : "Выберите чат";
 }
 
 function chatMetaText(chat) {
@@ -310,9 +309,7 @@ function chatMetaText(chat) {
         const count = state.membersById.size || chat.member_count || 0;
         return count ? `${count} участников` : "Групповой чат";
     }
-    if (chat.peer?.username) {
-        return `@${chat.peer.username}`;
-    }
+    if (chat.peer?.username) return `@${chat.peer.username}`;
     return "Личный чат";
 }
 
@@ -320,12 +317,16 @@ function setComposerEnabled(enabled) {
     const input = qs("messageInput");
     if (input) {
         input.disabled = !enabled;
-        input.placeholder = enabled ? "Напишите сообщение..." : "Выберите чат, чтобы начать переписку";
+        input.placeholder = enabled
+            ? "Напишите сообщение..."
+            : "Выберите чат, чтобы начать переписку";
     }
-    ["sendBtn", "btnAssets", "btnFile", "btnVoice", "btnCircle"].forEach((id) => {
-        const btn = qs(id);
-        if (btn) btn.disabled = !enabled;
-    });
+    ["sendBtn", "btnAssets", "btnFile", "btnVoice", "btnCircle"].forEach(
+        (id) => {
+            const btn = qs(id);
+            if (btn) btn.disabled = !enabled;
+        },
+    );
 }
 
 function setEmptyState(showEmpty) {
@@ -344,21 +345,25 @@ function setEmptyState(showEmpty) {
 function messageBody(m) {
     const text = toMultilineHtml(m.text || "");
     const parts = [];
-    if (text) {
-        parts.push(`<div class="message-text">${text}</div>`);
-    }
+    if (text) parts.push(`<div class="message-text">${text}</div>`);
     if (!m.file_url) return parts.join("");
     const fileUrl = withMediaToken(m.file_url);
     if (m.kind === "image" || m.kind === "sticker" || m.kind === "emoji") {
-        parts.push(`<img src="${fileUrl}" alt="${escapeHtml(m.file_name || "Вложение")}" loading="lazy">`);
+        parts.push(
+            `<img src="${fileUrl}" alt="${escapeHtml(m.file_name || "Вложение")}" loading="lazy">`,
+        );
         return parts.join("");
     }
     if (m.kind === "video" || m.kind === "circle") {
-        parts.push(`<video src="${fileUrl}" controls playsinline webkit-playsinline preload="metadata"></video>`);
+        parts.push(
+            `<video src="${fileUrl}" controls playsinline webkit-playsinline preload="metadata"></video>`,
+        );
         return parts.join("");
     }
     if (m.kind === "voice") {
-        parts.push(`<audio src="${fileUrl}" controls preload="metadata"></audio>`);
+        parts.push(
+            `<audio src="${fileUrl}" controls preload="metadata"></audio>`,
+        );
         return parts.join("");
     }
     return `${text ? `${text}<br>` : ""}<a href="${fileUrl}" target="_blank">${escapeHtml(m.file_name || "Файл")}</a>`;
@@ -366,7 +371,7 @@ function messageBody(m) {
 
 function appendMessage(m) {
     const mine = m.user_id === state.me?.id;
-    const isRead = mine && (m.read_count > 0);
+    const isRead = mine && m.read_count > 0;
     const item = document.createElement("div");
     item.dataset.mid = String(m.id);
     item.dataset.mine = mine ? "1" : "0";
@@ -394,27 +399,25 @@ function appendMessage(m) {
 }
 
 function removeMessageById(messageId) {
-    const target = qs("messages")?.querySelector(`[data-mid="${messageId}"]`);
-    if (target) target.remove();
+    qs("messages")?.querySelector(`[data-mid="${messageId}"]`)?.remove();
 }
 
 function renderProfileMini() {
     if (!state.me) return;
     const el = qs("profileMini");
-    if (el) {
-        const about = truncateText(state.me.about, 82);
-        el.innerHTML = `
-            <div class="profile-card">
-                ${avatarMarkup({ avatar: state.me.avatar, label: state.me.nickname, seed: `me-${state.me.id}`, className: "avatar-lg" })}
-                <div class="profile-card-copy">
-                    <strong>${escapeHtml(state.me.nickname)}</strong>
-                    <span>@${escapeHtml(state.me.username)}</span>
-                    ${about ? `<p>${escapeHtml(about)}</p>` : ""}
-                </div>
-                <div class="profile-id">#${state.me.id}</div>
+    if (!el) return;
+    const about = truncateText(state.me.about, 82);
+    el.innerHTML = `
+        <div class="profile-card">
+            ${avatarMarkup({ avatar: state.me.avatar, label: state.me.nickname, seed: `me-${state.me.id}`, className: "avatar-lg" })}
+            <div class="profile-card-copy">
+                <strong>${escapeHtml(state.me.nickname)}</strong>
+                <span>@${escapeHtml(state.me.username)}</span>
+                ${about ? `<p>${escapeHtml(about)}</p>` : ""}
             </div>
-        `;
-    }
+            <div class="profile-id">#${state.me.id}</div>
+        </div>
+    `;
 }
 
 function renderChatList(filter = "") {
@@ -424,30 +427,32 @@ function renderChatList(filter = "") {
     list.innerHTML = "";
     state.chats
         .filter((c) => {
-            const haystack = [
-                c.title,
-                c.peer?.nickname,
-                c.peer?.username,
-                c.last_text,
-            ].filter(Boolean).join(" ").toLowerCase();
-            return !q || haystack.includes(q);
+            const h = [c.title, c.peer?.nickname, c.peer?.username, c.last_text]
+                .filter(Boolean)
+                .join(" ")
+                .toLowerCase();
+            return !q || h.includes(q);
         })
         .forEach((chat) => {
             const title = chatTitleText(chat);
-            const preview = truncateText(chat.last_text || (chat.type === "group" ? "Групповой чат" : "Начните новый диалог"), 88);
-            const subtitle = chat.type === "group"
-                ? "Группа"
-                : (chat.peer?.username ? `@${chat.peer.username}` : "Личный чат");
+            const preview = truncateText(
+                chat.last_text ||
+                    (chat.type === "group"
+                        ? "Групповой чат"
+                        : "Начните новый диалог"),
+                88,
+            );
+            const subtitle =
+                chat.type === "group"
+                    ? "Группа"
+                    : chat.peer?.username
+                      ? `@${chat.peer.username}`
+                      : "Личный чат";
             const el = document.createElement("div");
             el.className = `item ${chat.id === state.currentChatId ? "selected" : ""}`;
             el.innerHTML = `
                 <div class="item-head">
-                    ${avatarMarkup({
-                        avatar: chat.peer?.avatar,
-                        label: title,
-                        seed: `chat-${chat.id}-${title}`,
-                        className: "avatar-md",
-                    })}
+                    ${avatarMarkup({ avatar: chat.peer?.avatar, label: title, seed: `chat-${chat.id}-${title}`, className: "avatar-md" })}
                     <div class="item-copy">
                         <div class="item-title-row">
                             <b>${escapeHtml(title)}</b>
@@ -457,9 +462,7 @@ function renderChatList(filter = "") {
                         <p class="item-preview">${escapeHtml(preview)}</p>
                     </div>
                 </div>
-                <div class="item-tags">
-                    <span class="item-tag">${chat.type === "group" ? "Group" : "DM"}</span>
-                </div>
+                <div class="item-tags"><span class="item-tag">${chat.type === "group" ? "Group" : "DM"}</span></div>
             `;
             el.onclick = () => openChat(chat.id);
             list.appendChild(el);
@@ -480,35 +483,41 @@ function setChatHeader(chat) {
     const btnLeave = qs("btnLeaveChat");
     const btnDelete = qs("btnDeleteGroup");
     const membersPanel = qs("groupMembersPanel");
+    const btnShowMembers = qs("btnShowMembers");
+
     if (titleEl) titleEl.textContent = titleText;
     if (metaEl) metaEl.textContent = chatMetaText(chat);
-    if (avatarEl) {
+    if (avatarEl)
         avatarEl.innerHTML = avatarMarkup({
             avatar: chat?.peer?.avatar,
             label: titleText,
             seed: chat ? `chat-${chat.id}-${titleText}` : "empty-chat",
             className: "avatar-xl avatar-placeholder",
         });
-    }
-    if (!chat) {
-        state.membersById = new Map();
-    }
-    const btnShowMembers = qs("btnShowMembers");
-    if (canCall) show(btnCall); else hide(btnCall);
-    if (group) show(btnInvite); else hide(btnInvite);
-    if (group) show(btnShowMembers); else hide(btnShowMembers);
-    if (btnInvite) btnInvite.title = group ? "Пригласить по username" : "Пригласить";
-    if (chat) show(btnLeave); else hide(btnLeave);
+    if (!chat) state.membersById = new Map();
+
+    if (canCall) show(btnCall);
+    else hide(btnCall);
+    if (group) show(btnInvite);
+    else hide(btnInvite);
+    if (group) show(btnShowMembers);
+    else hide(btnShowMembers);
+    if (btnInvite)
+        btnInvite.title = group ? "Пригласить по username" : "Пригласить";
+    if (chat) show(btnLeave);
+    else hide(btnLeave);
     if (btnLeave) {
         btnLeave.textContent = "🚪";
         btnLeave.title = group ? "Выйти из группы" : "Выйти из чата";
     }
-    if (canDelete) show(btnDelete); else hide(btnDelete);
+    if (canDelete) show(btnDelete);
+    else hide(btnDelete);
     if (btnDelete) {
         btnDelete.textContent = "🗑️";
         btnDelete.title = "Удалить группу";
     }
-    if (group) show(membersPanel); else hide(membersPanel);
+    if (group) show(membersPanel);
+    else hide(membersPanel);
     if (!group) closeMembersSheet();
     if (stack) stack.classList.toggle("has-members", group);
     setEmptyState(!chat);
@@ -544,7 +553,10 @@ async function loadMembers(chatId) {
             dm.textContent = "💬";
             dm.title = "Личный чат";
             dm.onclick = async () => {
-                const out = await api("/api/chats/direct", { method: "POST", body: JSON.stringify({ user_id: m.id }) });
+                const out = await api("/api/chats/direct", {
+                    method: "POST",
+                    body: JSON.stringify({ user_id: m.id }),
+                });
                 await loadChats();
                 await openChat(out.chat_id);
             };
@@ -552,7 +564,10 @@ async function loadMembers(chatId) {
             call.textContent = "📞";
             call.title = "Позвонить";
             call.onclick = async () => {
-                const out = await api("/api/chats/direct", { method: "POST", body: JSON.stringify({ user_id: m.id }) });
+                const out = await api("/api/chats/direct", {
+                    method: "POST",
+                    body: JSON.stringify({ user_id: m.id }),
+                });
                 await loadChats();
                 await openChat(out.chat_id);
                 await startCall();
@@ -564,25 +579,30 @@ async function loadMembers(chatId) {
             const promote = document.createElement("button");
             promote.className = "ghost";
             promote.textContent = m.role === "admin" ? "🙂" : "🛡️";
-            promote.title = m.role === "admin" ? "Сделать участником" : "Выдать админку";
+            promote.title =
+                m.role === "admin" ? "Сделать участником" : "Выдать админку";
             promote.onclick = async () => {
                 try {
                     await api(`/api/groups/${chatId}/members/${m.id}/role`, {
                         method: "POST",
-                        body: JSON.stringify({ role: m.role === "admin" ? "member" : "admin" }),
+                        body: JSON.stringify({
+                            role: m.role === "admin" ? "member" : "admin",
+                        }),
                     });
                     await Promise.all([loadMembers(chatId), loadChats()]);
                 } catch (e) {
                     alert(e.message);
                 }
             };
-            actions.appendChild(promote);
             const transfer = document.createElement("button");
             transfer.className = "ghost";
             transfer.textContent = "👑";
             transfer.title = "Передать owner";
             transfer.onclick = async () => {
-                if (!confirm(`Передать роль owner пользователю @${m.username}?`)) return;
+                if (
+                    !confirm(`Передать роль owner пользователю @${m.username}?`)
+                )
+                    return;
                 try {
                     await api(`/api/groups/${chatId}/members/${m.id}/role`, {
                         method: "POST",
@@ -593,9 +613,15 @@ async function loadMembers(chatId) {
                     alert(e.message);
                 }
             };
+            actions.appendChild(promote);
             actions.appendChild(transfer);
         }
-        if ((currentRole === "owner" && m.id !== state.me.id) || (currentRole === "admin" && m.role === "member" && m.id !== state.me.id)) {
+        if (
+            (currentRole === "owner" && m.id !== state.me.id) ||
+            (currentRole === "admin" &&
+                m.role === "member" &&
+                m.id !== state.me.id)
+        ) {
             const kick = document.createElement("button");
             kick.className = "danger";
             kick.textContent = "⛔";
@@ -603,7 +629,9 @@ async function loadMembers(chatId) {
             kick.onclick = async () => {
                 if (!confirm(`Исключить @${m.username} из группы?`)) return;
                 try {
-                    await api(`/api/groups/${chatId}/members/${m.id}`, { method: "DELETE" });
+                    await api(`/api/groups/${chatId}/members/${m.id}`, {
+                        method: "DELETE",
+                    });
                     await Promise.all([loadMembers(chatId), loadChats()]);
                 } catch (e) {
                     alert(e.message);
@@ -614,9 +642,7 @@ async function loadMembers(chatId) {
         el.appendChild(actions);
         wrap.appendChild(el);
     });
-    if (state.currentChatId === chatId) {
-        setChatHeader(state.currentChat);
-    }
+    if (state.currentChatId === chatId) setChatHeader(state.currentChat);
 }
 
 async function openChat(chatId) {
@@ -632,11 +658,8 @@ async function openChat(chatId) {
     const data = await api(`/api/chats/${chatId}/messages`);
     data.forEach(appendMessage);
     await markChatRead(chatId);
-    if (chat && chat.type === "group") {
-        await loadMembers(chatId);
-    } else {
-        state.membersById = new Map();
-    }
+    if (chat && chat.type === "group") await loadMembers(chatId);
+    else state.membersById = new Map();
 }
 
 async function loadChats() {
@@ -672,10 +695,7 @@ async function loadFriends() {
             <div class="item-head">
                 ${avatarMarkup({ avatar: f.avatar, label: f.nickname, seed: `friend-${f.id}`, className: "avatar-md" })}
                 <div class="item-copy">
-                    <div class="item-title-row">
-                        <b>${escapeHtml(f.nickname)}</b>
-                        <span class="item-tag">Friend</span>
-                    </div>
+                    <div class="item-title-row"><b>${escapeHtml(f.nickname)}</b><span class="item-tag">Friend</span></div>
                     <small>@${escapeHtml(f.username)} #${f.id}</small>
                     ${f.about ? `<p class="item-preview">${escapeHtml(truncateText(f.about, 90))}</p>` : ""}
                 </div>
@@ -686,7 +706,10 @@ async function loadFriends() {
         const dm = document.createElement("button");
         dm.textContent = "Чат";
         dm.onclick = async () => {
-            const out = await api("/api/chats/direct", { method: "POST", body: JSON.stringify({ user_id: f.id }) });
+            const out = await api("/api/chats/direct", {
+                method: "POST",
+                body: JSON.stringify({ user_id: f.id }),
+            });
             await loadChats();
             await openChat(out.chat_id);
         };
@@ -694,7 +717,10 @@ async function loadFriends() {
         block.className = "danger";
         block.textContent = "Блок";
         block.onclick = async () => {
-            await api(`/api/users/${f.id}/block`, { method: "POST", body: "{}" });
+            await api(`/api/users/${f.id}/block`, {
+                method: "POST",
+                body: "{}",
+            });
             await refreshSide();
         };
         actions.appendChild(dm);
@@ -727,14 +753,20 @@ async function loadFriendRequests() {
         const yes = document.createElement("button");
         yes.textContent = "Принять";
         yes.onclick = async () => {
-            await api(`/api/friends/request/${r.id}/accept`, { method: "POST", body: "{}" });
+            await api(`/api/friends/request/${r.id}/accept`, {
+                method: "POST",
+                body: "{}",
+            });
             await refreshSide();
         };
         const no = document.createElement("button");
         no.className = "danger";
         no.textContent = "Отклонить";
         no.onclick = async () => {
-            await api(`/api/friends/request/${r.id}/reject`, { method: "POST", body: "{}" });
+            await api(`/api/friends/request/${r.id}/reject`, {
+                method: "POST",
+                body: "{}",
+            });
             await refreshSide();
         };
         actions.appendChild(yes);
@@ -767,14 +799,20 @@ async function loadGroupInvites() {
         const yes = document.createElement("button");
         yes.textContent = "Принять";
         yes.onclick = async () => {
-            await api(`/api/groups/invites/${r.id}/accept`, { method: "POST", body: "{}" });
+            await api(`/api/groups/invites/${r.id}/accept`, {
+                method: "POST",
+                body: "{}",
+            });
             await Promise.all([loadGroupInvites(), loadChats()]);
         };
         const no = document.createElement("button");
         no.className = "danger";
         no.textContent = "Отклонить";
         no.onclick = async () => {
-            await api(`/api/groups/invites/${r.id}/reject`, { method: "POST", body: "{}" });
+            await api(`/api/groups/invites/${r.id}/reject`, {
+                method: "POST",
+                body: "{}",
+            });
             await loadGroupInvites();
         };
         actions.appendChild(yes);
@@ -795,10 +833,7 @@ async function loadBlockedList() {
         el.innerHTML = `
             <div class="item-head">
                 ${avatarMarkup({ avatar: u.avatar, label: u.nickname, seed: `blocked-${u.id}`, className: "avatar-sm" })}
-                <div class="item-copy">
-                    <b>${escapeHtml(u.nickname)}</b>
-                    <small>@${escapeHtml(u.username)} #${u.id}</small>
-                </div>
+                <div class="item-copy"><b>${escapeHtml(u.nickname)}</b><small>@${escapeHtml(u.username)} #${u.id}</small></div>
             </div>
         `;
         const actions = document.createElement("div");
@@ -834,7 +869,12 @@ function updateReadStatusUpTo(upToId) {
 }
 
 async function refreshSide() {
-    await Promise.all([loadFriends(), loadFriendRequests(), loadGroupInvites(), loadChats()]);
+    await Promise.all([
+        loadFriends(),
+        loadFriendRequests(),
+        loadGroupInvites(),
+        loadChats(),
+    ]);
 }
 
 async function sendMessage({ text = "", file = null, kind = "text" }) {
@@ -869,19 +909,21 @@ async function loadAssets() {
     if (!list) return;
     list.innerHTML = "";
     state.assets.forEach((a) => {
+        const preview =
+            a.kind === "emoji" || a.kind === "sticker"
+                ? `<img class="avatar avatar-md" src="${withMediaToken(a.file_url)}" alt="${escapeHtml(a.title || a.kind)}" loading="lazy">`
+                : avatarMarkup({
+                      label: a.kind,
+                      seed: `asset-${a.id}`,
+                      className: "avatar-md",
+                  });
         const el = document.createElement("div");
-        const preview = a.kind === "emoji" || a.kind === "sticker"
-            ? `<img class="avatar avatar-md" src="${withMediaToken(a.file_url)}" alt="${escapeHtml(a.title || a.kind)}" loading="lazy">`
-            : avatarMarkup({ label: a.kind, seed: `asset-${a.id}`, className: "avatar-md" });
         el.className = "item";
         el.innerHTML = `
             <div class="item-head">
                 ${preview}
                 <div class="item-copy">
-                    <div class="item-title-row">
-                        <b>${escapeHtml(a.title || a.kind)}</b>
-                        <span class="item-tag">${escapeHtml(a.kind)}</span>
-                    </div>
+                    <div class="item-title-row"><b>${escapeHtml(a.title || a.kind)}</b><span class="item-tag">${escapeHtml(a.kind)}</span></div>
                     <small>Персональный набор</small>
                 </div>
             </div>
@@ -914,10 +956,14 @@ async function startVoiceRecord() {
         return;
     }
     try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const stream = await navigator.mediaDevices.getUserMedia({
+            audio: true,
+        });
         const chunks = [];
         const mimeType = pickRecorderMime("audio");
-        const rec = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+        const rec = mimeType
+            ? new MediaRecorder(stream, { mimeType })
+            : new MediaRecorder(stream);
         state.mediaRecorder = rec;
         const btn = qs("btnVoice");
         if (btn) btn.textContent = "Стоп";
@@ -926,7 +972,9 @@ async function startVoiceRecord() {
             const outMime = rec.mimeType || mimeType || "audio/webm";
             const ext = extForMime(outMime, "webm");
             const blob = new Blob(chunks, { type: outMime });
-            const file = new File([blob], `voice_${Date.now()}.${ext}`, { type: outMime });
+            const file = new File([blob], `voice_${Date.now()}.${ext}`, {
+                type: outMime,
+            });
             await sendMessage({ file, kind: "voice" });
             stream.getTracks().forEach((t) => t.stop());
             state.mediaRecorder = null;
@@ -944,10 +992,15 @@ async function startCircleRecord() {
         return;
     }
     try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        const stream = await navigator.mediaDevices.getUserMedia({
+            video: true,
+            audio: true,
+        });
         const chunks = [];
         const mimeType = pickRecorderMime("video");
-        const rec = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+        const rec = mimeType
+            ? new MediaRecorder(stream, { mimeType })
+            : new MediaRecorder(stream);
         state.circleRecorder = rec;
         const btn = qs("btnCircle");
         if (btn) btn.textContent = "Стоп";
@@ -956,7 +1009,9 @@ async function startCircleRecord() {
             const outMime = rec.mimeType || mimeType || "video/webm";
             const ext = extForMime(outMime, "webm");
             const blob = new Blob(chunks, { type: outMime });
-            const file = new File([blob], `circle_${Date.now()}.${ext}`, { type: outMime });
+            const file = new File([blob], `circle_${Date.now()}.${ext}`, {
+                type: outMime,
+            });
             await sendMessage({ file, kind: "circle" });
             stream.getTracks().forEach((t) => t.stop());
             state.circleRecorder = null;
@@ -969,171 +1024,95 @@ async function startCircleRecord() {
 }
 
 // =============================================================================
-// === ИДЕАЛЬНАЯ ЛОГИКА ЗВОНКОВ (ПОЛНОСТЬЮ ПЕРЕПИСАНО) ===
+// === ЛОГИКА ЗВОНКОВ ===
 // =============================================================================
 
 function getDefaultIceServers() {
     return [
         { urls: "stun:stun.l.google.com:19302" },
         { urls: "stun:stun1.l.google.com:19302" },
-        { urls: "stun:stun2.l.google.com:19302" }
     ];
 }
 
 async function fetchIceServers() {
     try {
-        const config = await api("/api/rtc-config");
-        return config.ice_servers || getDefaultIceServers();
+        const cfg = await api("/api/rtc-config");
+        return cfg.ice_servers && cfg.ice_servers.length
+            ? cfg.ice_servers
+            : getDefaultIceServers();
     } catch {
         return getDefaultIceServers();
     }
 }
 
-// Создание peer connection с perfect negotiation
-async function createPeerConnection(userId, isInitiator) {
-    const existing = state.call.peers.get(userId);
-    if (existing) {
-        console.log(`Peer ${userId} already exists`);
-        return existing;
-    }
+// ─── Воспроизведение медиа ────────────────────────────────────────────────────
+// forceMuted=true  → <video> без звука (звук идёт через отдельный <audio>)
+// forceMuted=false → <audio> удалённого участника (нужен звук)
+async function safePlayMedia(mediaEl, forceMuted = false) {
+    if (!mediaEl) return;
+    mediaEl.playsInline = true;
+    mediaEl.autoplay = true;
 
-    const pc = new RTCPeerConnection({
-        iceServers: state.call.iceServers,
-        iceCandidatePoolSize: 10,
-        bundlePolicy: "max-bundle",
-        rtcpMuxPolicy: "require"
-    });
-
-    // Добавляем локальные треки
-    if (state.call.localStream) {
-        state.call.localStream.getTracks().forEach(track => {
-            pc.addTrack(track, state.call.localStream);
-        });
-    }
-
-    // ICE кандидаты
-    pc.onicecandidate = (e) => {
-        if (!e.candidate) return;
-        sendCallSignal(userId, {
-            type: "candidate",
-            candidate: e.candidate
-        });
-    };
-
-    // Получаем удалённый поток
-    pc.ontrack = (e) => {
-        handleRemoteTrack(userId, e.streams[0]);
-    };
-
-    // Мониторинг состояния
-    pc.onconnectionstatechange = () => {
-        console.log(`Peer ${userId} connection: ${pc.connectionState}`);
-        
-        if (pc.connectionState === "connected") {
-            updateTileConnectionState(userId, "connected");
-        } else if (pc.connectionState === "failed") {
-            console.log(`Peer ${userId} failed, attempting restart...`);
-            pc.restartIce();
-        } else if (pc.connectionState === "disconnected") {
-            updateTileConnectionState(userId, "disconnected");
-        }
-    };
-
-    pc.oniceconnectionstatechange = () => {
-        if (pc.iceConnectionState === "failed") {
-            pc.restartIce();
-        }
-    };
-
-    state.call.peers.set(userId, pc);
-
-    // Только инициатор создаёт offer
-    if (isInitiator) {
+    if (forceMuted) {
+        mediaEl.muted = true;
         try {
-            const offer = await pc.createOffer({
-                offerToReceiveAudio: true,
-                offerToReceiveVideo: true
-            });
-            await pc.setLocalDescription(offer);
-            sendCallSignal(userId, {
-                type: "offer",
-                sdp: pc.localDescription
-            });
-        } catch (e) {
-            console.error("Failed to create offer:", e);
-        }
+            await mediaEl.play();
+        } catch {}
+        return;
     }
 
-    return pc;
+    // Пробуем сразу со звуком
+    mediaEl.muted = false;
+    try {
+        await mediaEl.play();
+        return;
+    } catch {}
+
+    // Fallback: muted → play → unmute (Safari)
+    mediaEl.muted = true;
+    try {
+        await mediaEl.play();
+        setTimeout(() => {
+            mediaEl.muted = false;
+        }, 300);
+    } catch (e) {
+        console.warn("safePlayMedia failed:", e);
+    }
 }
 
-// Обработка входящего трека
-function handleRemoteTrack(userId, stream) {
-    state.call.remoteStreams.set(userId, stream);
-    
-    // Создаём или обновляем tile
-    let tile = state.call.tiles.get(userId);
-    if (!tile) {
-        tile = createCallTile(userId, false);
-        state.call.tiles.set(userId, tile);
-    }
-
-    // Привязываем поток к видео
-    if (tile.video.srcObject !== stream) {
-        tile.video.srcObject = stream;
-        playMediaWithRetry(tile.video);
-    }
-
-    // Отдельно аудио для надёжности
-    const audioTrack = stream.getAudioTracks()[0];
-    if (audioTrack) {
-        const audioStream = new MediaStream([audioTrack]);
-        tile.audio.srcObject = audioStream;
-        playMediaWithRetry(tile.audio);
-    }
-
-    // Обновляем UI состояния
-    updateRemoteTileState(userId);
-}
-
-// Создание video tile
+// ─── Tile участника ───────────────────────────────────────────────────────────
 function createCallTile(userId, isLocal) {
     const grid = qs("callGrid");
     if (!grid) return null;
 
-    // Удаляем существующий если есть
-    const existing = grid.querySelector(`[data-uid="${userId}"]`);
-    if (existing) existing.remove();
+    // Удаляем дубли
+    grid.querySelector(`[data-uid="${userId}"]`)?.remove();
 
     const tile = document.createElement("div");
     tile.className = `call-tile ${isLocal ? "local" : "remote"}`;
-    tile.dataset.uid = userId;
+    tile.dataset.uid = String(userId);
 
+    // <video> — ВСЕГДА muted, картинка без звука
     const video = document.createElement("video");
     video.autoplay = true;
     video.playsInline = true;
     video.setAttribute("playsinline", "");
     video.setAttribute("webkit-playsinline", "");
-    video.muted = isLocal;
-    
-    if (isLocal) {
-        video.style.transform = "scaleX(-1)";
-    }
+    video.muted = true;
+    if (isLocal) video.style.transform = "scaleX(-1)";
 
+    // <audio> — только звук, для удалённых участников
     const audio = document.createElement("audio");
     audio.autoplay = true;
-    audio.muted = isLocal;
+    audio.muted = isLocal; // себя не слышим
 
     const who = document.createElement("div");
     who.className = "who";
-    
     const nameSpan = document.createElement("span");
     nameSpan.textContent = isLocal ? "Вы" : peerNameById(userId);
-    
     const stateSpan = document.createElement("span");
     stateSpan.className = "tile-state";
     stateSpan.textContent = "🎤";
-
     who.appendChild(nameSpan);
     who.appendChild(stateSpan);
 
@@ -1142,200 +1121,249 @@ function createCallTile(userId, isLocal) {
     tile.appendChild(who);
     grid.appendChild(tile);
 
-    // Оптимизация layout для мобильных
-    optimizeCallLayout();
-
     return { tile, video, audio, who, stateSpan };
 }
 
-// Воспроизведение с обходом autoplay
-async function playMediaWithRetry(mediaEl, retries = 3) {
-    for (let i = 0; i < retries; i++) {
-        try {
-            const wasMuted = mediaEl.muted;
-            mediaEl.muted = true;
-            await mediaEl.play();
-            mediaEl.muted = wasMuted;
-            return true;
-        } catch (e) {
-            console.warn(`Play attempt ${i + 1} failed:`, e);
-            await new Promise(r => setTimeout(r, 100));
-        }
+// ─── Привязка удалённого потока к tile ───────────────────────────────────────
+function attachRemoteStream(userId, stream) {
+    let card = state.call.tiles.get(userId);
+    if (!card) {
+        card = createCallTile(userId, false);
+        if (!card) return;
+        state.call.tiles.set(userId, card);
     }
-    
-    // Последняя попытка с пользовательским взаимодействием
-    console.error("Failed to autoplay media");
-    return false;
+
+    state.call.remoteStreams.set(userId, stream);
+
+    const videoTracks = stream.getVideoTracks();
+    if (videoTracks.length > 0) {
+        card.video.srcObject = new MediaStream(videoTracks);
+        safePlayMedia(card.video, true); // видео без звука
+    }
+
+    const audioTracks = stream.getAudioTracks();
+    if (audioTracks.length > 0) {
+        card.audio.srcObject = new MediaStream(audioTracks);
+        safePlayMedia(card.audio, false); // аудио со звуком
+    }
+
+    // Реагируем на новые треки (включилась камера)
+    stream.onaddtrack = () => attachRemoteStream(userId, stream);
 }
 
-// Отправка сигнала
-function sendCallSignal(toUserId, signal) {
-    if (!state.ws || state.ws.readyState !== WebSocket.OPEN) return;
-    
-    state.ws.send(JSON.stringify({
-        type: "call:signal",
-        chat_id: state.call.chatId,
-        to_user: toUserId,
-        signal: signal
-    }));
+// ─── Построение RTCPeerConnection ─────────────────────────────────────────────
+function buildPeerConnection(userId) {
+    const pc = new RTCPeerConnection({
+        iceServers: state.call.iceServers || getDefaultIceServers(),
+        iceCandidatePoolSize: 4,
+        bundlePolicy: "max-bundle",
+        rtcpMuxPolicy: "require",
+    });
+
+    pc._userId = userId;
+    pc._makingOffer = false;
+
+    // Добавляем свои треки
+    if (state.call.localStream) {
+        state.call.localStream
+            .getTracks()
+            .forEach((t) => pc.addTrack(t, state.call.localStream));
+    }
+
+    pc.onicecandidate = ({ candidate }) => {
+        if (candidate) sendCallSignal(userId, { type: "candidate", candidate });
+    };
+
+    pc.ontrack = ({ streams, track }) => {
+        let stream = streams?.[0];
+        if (!stream) {
+            stream = state.call.remoteStreams.get(userId) || new MediaStream();
+            stream.addTrack(track);
+            state.call.remoteStreams.set(userId, stream);
+        }
+        attachRemoteStream(userId, stream);
+    };
+
+    pc.onconnectionstatechange = () => {
+        console.log(`Peer ${userId}: ${pc.connectionState}`);
+        const card = state.call.tiles.get(userId);
+        if (card)
+            card.tile.style.opacity =
+                pc.connectionState === "connected" ? "1" : "0.6";
+        if (pc.connectionState === "failed") pc.restartIce();
+    };
+
+    pc.oniceconnectionstatechange = () => {
+        if (pc.iceConnectionState === "failed") pc.restartIce();
+    };
+
+    // КРИТИЧНО: переговоры при динамическом добавлении треков (включили камеру)
+    pc.onnegotiationneeded = async () => {
+        if (!state.call.active || pc._makingOffer) return;
+        try {
+            pc._makingOffer = true;
+            const offer = await pc.createOffer({
+                offerToReceiveAudio: true,
+                offerToReceiveVideo: true,
+            });
+            if (pc.signalingState !== "stable") return;
+            await pc.setLocalDescription(offer);
+            sendCallSignal(userId, { type: "offer", sdp: pc.localDescription });
+        } catch (e) {
+            console.error("onnegotiationneeded error:", e);
+        } finally {
+            pc._makingOffer = false;
+        }
+    };
+
+    state.call.peers.set(userId, pc);
+    return pc;
 }
 
-// Обработка входящего сигнала
+// Создаёт PC и отправляет первый offer
+async function createOfferPeer(userId) {
+    userId = Number(userId);
+    if (state.call.peers.has(userId)) return state.call.peers.get(userId);
+
+    const pc = buildPeerConnection(userId);
+    pc._makingOffer = true;
+    try {
+        const offer = await pc.createOffer({
+            offerToReceiveAudio: true,
+            offerToReceiveVideo: true,
+        });
+        await pc.setLocalDescription(offer);
+        sendCallSignal(userId, { type: "offer", sdp: pc.localDescription });
+    } catch (e) {
+        console.error("createOfferPeer failed:", e);
+    } finally {
+        pc._makingOffer = false;
+    }
+    return pc;
+}
+
+// ─── Буфер ICE кандидатов ─────────────────────────────────────────────────────
+async function flushCandidates(userId, pc) {
+    const buffered = state.call.pendingCandidates.get(userId) || [];
+    state.call.pendingCandidates.delete(userId);
+    for (const c of buffered) {
+        try {
+            await pc.addIceCandidate(new RTCIceCandidate(c));
+        } catch {}
+    }
+}
+
+// ─── Обработка входящих сигналов ─────────────────────────────────────────────
 async function handleCallSignal(fromUserId, signal) {
-    const myId = state.me?.id;
-    const isInitiator = myId < fromUserId;
-    
-    let pc = state.call.peers.get(fromUserId);
+    if (!state.call.active) return;
+    fromUserId = Number(fromUserId);
+
+    // Вежливый = у кого ID больше (отступает при столкновении offer)
+    const polite = state.me.id > fromUserId;
 
     try {
         if (signal.type === "offer") {
-            // Мы ответчик
-            if (!pc) {
-                pc = await createPeerConnection(fromUserId, false);
+            let pc = state.call.peers.get(fromUserId);
+            if (!pc) pc = buildPeerConnection(fromUserId);
+
+            const collision = pc._makingOffer || pc.signalingState !== "stable";
+            if (collision) {
+                if (!polite) return;
+                await pc.setLocalDescription({ type: "rollback" });
             }
-            
-            await pc.setRemoteDescription(new RTCSessionDescription(signal.sdp));
-            
+
+            await pc.setRemoteDescription(
+                new RTCSessionDescription(signal.sdp),
+            );
             const answer = await pc.createAnswer();
             await pc.setLocalDescription(answer);
-            
             sendCallSignal(fromUserId, {
                 type: "answer",
-                sdp: pc.localDescription
+                sdp: pc.localDescription,
             });
-
-            // Применяем buffered candidates
-            applyBufferedCandidates(fromUserId, pc);
-            
+            await flushCandidates(fromUserId, pc);
         } else if (signal.type === "answer") {
-            // Мы инициатор
-            if (!pc) return;
-            await pc.setRemoteDescription(new RTCSessionDescription(signal.sdp));
-            applyBufferedCandidates(fromUserId, pc);
-            
+            const pc = state.call.peers.get(fromUserId);
+            if (!pc || pc.signalingState !== "have-local-offer") return;
+            await pc.setRemoteDescription(
+                new RTCSessionDescription(signal.sdp),
+            );
+            await flushCandidates(fromUserId, pc);
         } else if (signal.type === "candidate") {
+            const pc = state.call.peers.get(fromUserId);
             if (!pc || !pc.remoteDescription) {
-                // Буферизуем
                 if (!state.call.pendingCandidates.has(fromUserId)) {
                     state.call.pendingCandidates.set(fromUserId, []);
                 }
-                state.call.pendingCandidates.get(fromUserId).push(signal.candidate);
-                return;
+                state.call.pendingCandidates
+                    .get(fromUserId)
+                    .push(signal.candidate);
+            } else {
+                await pc.addIceCandidate(new RTCIceCandidate(signal.candidate));
             }
-            
-            await pc.addIceCandidate(new RTCIceCandidate(signal.candidate));
         }
     } catch (e) {
-        console.error("Signal handling error:", e);
+        console.error("handleCallSignal error:", e);
     }
 }
 
-// Применение buffered ICE candidates
-async function applyBufferedCandidates(userId, pc) {
-    const buffered = state.call.pendingCandidates.get(userId);
-    if (!buffered) return;
-    
-    for (const candidate of buffered) {
-        try {
-            await pc.addIceCandidate(new RTCIceCandidate(candidate));
-        } catch (e) {
-            console.warn("Failed to add buffered candidate:", e);
-        }
+function sendCallSignal(toUserId, signal) {
+    if (!state.ws || state.ws.readyState !== WebSocket.OPEN) return;
+    state.ws.send(
+        JSON.stringify({
+            type: "call:signal",
+            chat_id: state.call.chatId,
+            to_user: toUserId,
+            signal,
+        }),
+    );
+}
+
+// ─── Удаление участника ───────────────────────────────────────────────────────
+function removePeer(userId) {
+    userId = Number(userId);
+    const pc = state.call.peers.get(userId);
+    if (pc) {
+        pc.close();
+        state.call.peers.delete(userId);
     }
-    
+    const card = state.call.tiles.get(userId);
+    if (card) {
+        card.tile.remove();
+        state.call.tiles.delete(userId);
+    }
+    state.call.remoteStreams.delete(userId);
     state.call.pendingCandidates.delete(userId);
 }
 
-// Обновление UI tile
-function updateRemoteTileState(userId) {
-    const tile = state.call.tiles.get(userId);
-    if (!tile) return;
-    
-    const stream = state.call.remoteStreams.get(userId);
-    if (!stream) return;
-    
-    const hasVideo = stream.getVideoTracks().length > 0 && stream.getVideoTracks()[0].enabled;
-    const hasAudio = stream.getAudioTracks().length > 0 && stream.getAudioTracks()[0].enabled;
-    
-    tile.stateSpan.textContent = `${hasAudio ? '🎤' : '🔇'} ${hasVideo ? '📷' : ''}`;
-    
-    // Если видео появилось - обновляем
-    if (hasVideo && tile.video.paused) {
-        playMediaWithRetry(tile.video);
-    }
-}
-
-function updateTileConnectionState(userId, state) {
-    const tile = state.call.tiles.get(userId);
-    if (!tile) return;
-    
-    tile.tile.style.opacity = state === "connected" ? "1" : "0.5";
-}
-
-// Оптимизация layout
-function optimizeCallLayout() {
-    const grid = qs("callGrid");
-    if (!grid) return;
-    
-    const tileCount = grid.children.length;
-    
-    if (isMobile) {
-        // На мобильном: 1 колонка, видим только активного или первого
-        grid.style.gridTemplateColumns = "1fr";
-        
-        // Показываем только первое видео (обычно это собеседник)
-        Array.from(grid.children).forEach((child, idx) => {
-            child.style.display = idx === 0 ? "block" : "none";
-        });
-    } else {
-        // На десктопе: адаптивный grid
-        if (tileCount <= 2) {
-            grid.style.gridTemplateColumns = "repeat(2, 1fr)";
-        } else if (tileCount <= 4) {
-            grid.style.gridTemplateColumns = "repeat(2, 1fr)";
-        } else {
-            grid.style.gridTemplateColumns = "repeat(auto-fit, minmax(300px, 1fr))";
-        }
-    }
-}
-
-// === ПУБЛИЧНЫЕ ФУНКЦИИ ЗВОНКА ===
+// ─── Управление звонком ───────────────────────────────────────────────────────
 
 async function startCall() {
-    if (!state.currentChat) return;
-    if (state.call.active) return;
-
-    // Разблокируем аудио контекст (критично!)
+    if (!state.currentChat || state.call.active) return;
     await unlockAudioContext();
 
     if (!state.ws || state.ws.readyState !== WebSocket.OPEN) {
-        alert("Нет соединения с сервером");
+        alert("Нет соединения. Попробуйте ещё раз.");
         return;
     }
 
-    // Получаем ICE серверы
     state.call.iceServers = await fetchIceServers();
 
-    // Создаём аудио поток СРАЗУ (ключ к мгновенному звуку)
     try {
         const audioStream = await navigator.mediaDevices.getUserMedia({
             audio: {
                 echoCancellation: true,
                 noiseSuppression: true,
                 autoGainControl: true,
-                sampleRate: { ideal: 48000 },
-                channelCount: { ideal: 1 }
             },
-            video: false
+            video: false,
         });
-
         state.call.localStream = new MediaStream();
-        audioStream.getAudioTracks().forEach(t => {
-            t.enabled = true;
-            state.call.localStream.addTrack(t);
-        });
+        audioStream
+            .getAudioTracks()
+            .forEach((t) => state.call.localStream.addTrack(t));
     } catch (e) {
-        alert("Не удалось получить доступ к микрофону: " + e.message);
+        alert("Нет доступа к микрофону: " + e.message);
         return;
     }
 
@@ -1346,7 +1374,6 @@ async function startCall() {
     state.call.cam = false;
     state.call.screen = false;
 
-    // Очищаем UI
     const grid = qs("callGrid");
     if (grid) grid.innerHTML = "";
     state.call.peers.clear();
@@ -1354,40 +1381,43 @@ async function startCall() {
     state.call.remoteStreams.clear();
     state.call.pendingCandidates.clear();
 
-    // Создаём локальный tile
-    const localTile = createCallTile(state.me?.id, true);
-    if (localTile) {
-        localTile.video.srcObject = new MediaStream(state.call.localStream.getTracks());
-        playMediaWithRetry(localTile.video);
-        state.call.tiles.set(state.me?.id, localTile);
+    const localCard = createCallTile(state.me?.id, true);
+    if (localCard) {
+        localCard.video.srcObject = new MediaStream(
+            state.call.localStream.getTracks(),
+        );
+        safePlayMedia(localCard.video, true);
+        state.call.tiles.set(state.me?.id, localCard);
     }
 
-    // Показываем UI
+    const titleEl = qs("callTitleLabel");
+    if (titleEl)
+        titleEl.textContent = `Звонок: ${state.currentChat.title || state.currentChat.peer?.nickname || "чат"}`;
+
     show(qs("callOverlay"));
     hide(qs("btnCallRestore"));
     updateCallButtons();
     startCallTimer();
 
-    // Отправляем join
-    state.ws.send(JSON.stringify({
-        type: "call:join",
-        chat_id: state.call.chatId,
-        mic: true,
-        cam: false,
-        screen: false
-    }));
+    state.ws.send(
+        JSON.stringify({
+            type: "call:join",
+            chat_id: state.call.chatId,
+            mic: true,
+            cam: false,
+            screen: false,
+        }),
+    );
 }
 
 function leaveCall() {
     if (!state.call.active) return;
 
-    // Останавливаем треки
-    state.call.localStream?.getTracks().forEach(t => t.stop());
-    
-    // Закрываем соединения
-    state.call.peers.forEach(pc => pc.close());
-    
-    // Очищаем состояние
+    // Сохраняем chatId ДО очистки состояния
+    const chatId = state.call.chatId;
+
+    state.call.localStream?.getTracks().forEach((t) => t.stop());
+    state.call.peers.forEach((pc) => pc.close());
     state.call.peers.clear();
     state.call.tiles.clear();
     state.call.remoteStreams.clear();
@@ -1395,29 +1425,31 @@ function leaveCall() {
     state.call.localStream = null;
     state.call.active = false;
     state.call.chatId = null;
-    
+    state.call.cam = false;
+    state.call.screen = false;
+    state.call.mic = true;
+
     stopCallTimer();
 
-    // Уведомляем сервер
+    // Отправляем с сохранённым chatId
     if (state.ws?.readyState === WebSocket.OPEN) {
-        state.ws.send(JSON.stringify({
-            type: "call:leave",
-            chat_id: state.call.chatId
-        }));
+        state.ws.send(JSON.stringify({ type: "call:leave", chat_id: chatId }));
     }
 
     hide(qs("callOverlay"));
     hide(qs("btnCallRestore"));
+    const grid = qs("callGrid");
+    if (grid) grid.innerHTML = "";
+    updateCallButtons();
+    state.ui.callMinimized = false;
 }
 
 async function toggleMic() {
     if (!state.call.active) return;
-    
     state.call.mic = !state.call.mic;
-    state.call.localStream?.getAudioTracks().forEach(t => {
+    state.call.localStream?.getAudioTracks().forEach((t) => {
         t.enabled = state.call.mic;
     });
-    
     updateLocalTileState();
     broadcastCallState();
     updateCallButtons();
@@ -1425,72 +1457,67 @@ async function toggleMic() {
 
 async function toggleCam() {
     if (!state.call.active) return;
-    
-    const videoTrack = state.call.localStream?.getVideoTracks()[0];
-    
-    if (videoTrack) {
-        // Выключаем
-        videoTrack.stop();
-        state.call.localStream.removeTrack(videoTrack);
-        
-        // Уведомляем peers
-        state.call.peers.forEach(async (pc) => {
-            const sender = pc.getSenders().find(s => s.track?.kind === "video");
-            if (sender) await sender.replaceTrack(null);
-        });
-        
+
+    const existing = state.call.localStream?.getVideoTracks()[0];
+
+    if (existing) {
+        // Выключаем камеру
+        existing.stop();
+        state.call.localStream.removeTrack(existing);
         state.call.cam = false;
         state.call.screen = false;
+
+        for (const pc of state.call.peers.values()) {
+            const sender = pc
+                .getSenders()
+                .find((s) => s.track?.kind === "video");
+            if (sender) await sender.replaceTrack(null);
+        }
     } else {
-        // Включаем
+        // Включаем камеру
         try {
-            const constraints = {
-                video: {
-                    width: { ideal: 1280 },
-                    height: { ideal: 720 },
-                    frameRate: { ideal: 30 }
-                }
-            };
-            
-            if (isMobile) {
-                constraints.video.facingMode = state.devicePrefs.camFacing;
-            }
-            
-            const stream = await navigator.mediaDevices.getUserMedia(constraints);
-            const newTrack = stream.getVideoTracks()[0];
-            
-            state.call.localStream.addTrack(newTrack);
-            
-            // Обновляем все соединения
-            state.call.peers.forEach(async (pc) => {
-                const sender = pc.getSenders().find(s => s.track?.kind === "video");
-                if (sender) {
-                    await sender.replaceTrack(newTrack);
-                } else {
-                    pc.addTrack(newTrack, state.call.localStream);
-                }
-            });
-            
+            const constraints = isMobile
+                ? {
+                      video: {
+                          facingMode: { ideal: state.devicePrefs.camFacing },
+                      },
+                  }
+                : { video: { width: { ideal: 1280 }, height: { ideal: 720 } } };
+            const stream =
+                await navigator.mediaDevices.getUserMedia(constraints);
+            const track = stream.getVideoTracks()[0];
+            state.call.localStream.addTrack(track);
             state.call.cam = true;
             state.call.screen = false;
+
+            for (const pc of state.call.peers.values()) {
+                const sender = pc
+                    .getSenders()
+                    .find((s) => s.track?.kind === "video");
+                if (sender) {
+                    await sender.replaceTrack(track);
+                } else {
+                    // addTrack → onnegotiationneeded → автоматические переговоры
+                    pc.addTrack(track, state.call.localStream);
+                }
+            }
         } catch (e) {
-            alert("Ошибка доступа к камере: " + e.message);
+            alert("Нет доступа к камере: " + e.message);
             return;
         }
     }
-    
-    // Обновляем локальный tile
-    const localTile = state.call.tiles.get(state.me?.id);
-    if (localTile) {
-        const videoTracks = state.call.localStream?.getVideoTracks() || [];
-        if (videoTracks.length > 0) {
-            localTile.video.srcObject = new MediaStream(videoTracks);
-            playMediaWithRetry(localTile.video);
+
+    const localCard = state.call.tiles.get(state.me?.id);
+    if (localCard) {
+        const vtracks = state.call.localStream?.getVideoTracks() || [];
+        if (vtracks.length) {
+            localCard.video.srcObject = new MediaStream(vtracks);
+            safePlayMedia(localCard.video, true);
         } else {
-            localTile.video.srcObject = null;
+            localCard.video.srcObject = null;
         }
     }
-    
+
     updateLocalTileState();
     broadcastCallState();
     updateCallButtons();
@@ -1498,98 +1525,148 @@ async function toggleCam() {
 
 async function toggleScreenShare() {
     if (!state.call.active) return;
-    
-    if (isMobile || !navigator.mediaDevices.getDisplayMedia) {
+    if (isMobile || !navigator.mediaDevices?.getDisplayMedia) {
         alert("Демонстрация экрана недоступна на мобильных устройствах");
         return;
     }
-    
-    const videoTrack = state.call.localStream?.getVideoTracks()[0];
-    
+
     if (state.call.screen) {
-        // Останавливаем
-        videoTrack?.stop();
-        state.call.localStream.removeTrack(videoTrack);
+        state.call.localStream?.getVideoTracks().forEach((t) => {
+            t.stop();
+            state.call.localStream.removeTrack(t);
+        });
         state.call.screen = false;
         state.call.cam = false;
-        
-        // Пробуем вернуть камеру
-        await toggleCam();
-        return;
-    }
-    
-    try {
-        const stream = await navigator.mediaDevices.getDisplayMedia({
-            video: { cursor: "always" },
-            audio: false
-        });
-        
-        const screenTrack = stream.getVideoTracks()[0];
-        
-        // Останавливаем текущее видео
-        if (videoTrack) {
-            videoTrack.stop();
-            state.call.localStream.removeTrack(videoTrack);
+        for (const pc of state.call.peers.values()) {
+            const sender = pc
+                .getSenders()
+                .find((s) => s.track?.kind === "video");
+            if (sender) await sender.replaceTrack(null);
         }
-        
-        state.call.localStream.addTrack(screenTrack);
-        
-        // Обновляем peers
-        state.call.peers.forEach(async (pc) => {
-            const sender = pc.getSenders().find(s => s.track?.kind === "video");
-            if (sender) {
-                await sender.replaceTrack(screenTrack);
+    } else {
+        try {
+            const stream = await navigator.mediaDevices.getDisplayMedia({
+                video: true,
+                audio: false,
+            });
+            const track = stream.getVideoTracks()[0];
+            state.call.localStream?.getVideoTracks().forEach((t) => {
+                t.stop();
+                state.call.localStream.removeTrack(t);
+            });
+            state.call.localStream.addTrack(track);
+            state.call.screen = true;
+            state.call.cam = true;
+
+            for (const pc of state.call.peers.values()) {
+                const sender = pc
+                    .getSenders()
+                    .find((s) => s.track?.kind === "video");
+                if (sender) {
+                    await sender.replaceTrack(track);
+                } else {
+                    pc.addTrack(track, state.call.localStream);
+                }
             }
-        });
-        
-        screenTrack.onended = () => {
-            if (state.call.screen) toggleScreenShare();
-        };
-        
-        state.call.screen = true;
-        state.call.cam = true;
-        
-        // Обновляем UI
-        const localTile = state.call.tiles.get(state.me?.id);
-        if (localTile) {
-            localTile.video.srcObject = new MediaStream([screenTrack]);
-            playMediaWithRetry(localTile.video);
+            track.onended = () => {
+                if (state.call.screen) toggleScreenShare();
+            };
+        } catch (e) {
+            console.error("Screen share failed:", e);
+            return;
         }
-        
-        updateLocalTileState();
-        broadcastCallState();
-        updateCallButtons();
-        
+    }
+
+    const localCard = state.call.tiles.get(state.me?.id);
+    if (localCard) {
+        const vtracks = state.call.localStream?.getVideoTracks() || [];
+        if (vtracks.length) {
+            localCard.video.srcObject = new MediaStream(vtracks);
+            safePlayMedia(localCard.video, true);
+        } else {
+            localCard.video.srcObject = null;
+        }
+    }
+
+    updateLocalTileState();
+    broadcastCallState();
+    updateCallButtons();
+}
+
+async function rotateCamera() {
+    state.devicePrefs.camFacing =
+        state.devicePrefs.camFacing === "environment" ? "user" : "environment";
+    if (!state.call.cam || state.call.screen) return;
+
+    const oldTrack = state.call.localStream?.getVideoTracks()[0];
+    if (oldTrack) {
+        oldTrack.stop();
+        state.call.localStream.removeTrack(oldTrack);
+    }
+
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: { exact: state.devicePrefs.camFacing } },
+        });
+        const newTrack = stream.getVideoTracks()[0];
+        state.call.localStream.addTrack(newTrack);
+
+        for (const pc of state.call.peers.values()) {
+            const sender = pc
+                .getSenders()
+                .find((s) => s.track?.kind === "video");
+            if (sender) await sender.replaceTrack(newTrack);
+        }
+
+        const localCard = state.call.tiles.get(state.me?.id);
+        if (localCard) {
+            localCard.video.srcObject = new MediaStream([newTrack]);
+            safePlayMedia(localCard.video, true);
+        }
     } catch (e) {
-        console.error("Screen share failed:", e);
+        console.error("rotateCamera failed:", e);
     }
 }
 
 function updateLocalTileState() {
-    const tile = state.call.tiles.get(state.me?.id);
-    if (!tile) return;
-    
-    tile.stateSpan.textContent = `${state.call.mic ? '🎤' : '🔇'} ${state.call.cam ? (state.call.screen ? '🖥️' : '📷') : ''}`;
+    const card = state.call.tiles.get(state.me?.id);
+    if (!card) return;
+    card.stateSpan.textContent = `${state.call.mic ? "🎤" : "🔇"} ${state.call.cam ? (state.call.screen ? "🖥️" : "📷") : ""}`;
 }
 
 function broadcastCallState() {
-    if (!state.ws || state.ws.readyState !== WebSocket.OPEN) return;
-    
-    state.ws.send(JSON.stringify({
-        type: "call:state",
-        chat_id: state.call.chatId,
-        mic: state.call.mic,
-        cam: state.call.cam,
-        screen: state.call.screen
-    }));
+    if (
+        !state.ws ||
+        state.ws.readyState !== WebSocket.OPEN ||
+        !state.call.active
+    )
+        return;
+    state.ws.send(
+        JSON.stringify({
+            type: "call:state",
+            chat_id: state.call.chatId,
+            mic: state.call.mic,
+            cam: state.call.cam,
+            screen: state.call.screen,
+        }),
+    );
+}
+
+function setRemoteTileState(userId, s) {
+    if (!s) return;
+    const card = state.call.tiles.get(Number(userId));
+    if (!card) return;
+    card.stateSpan.textContent = `${s.mic ? "🎤" : "🔇"} ${s.cam ? (s.screen ? "🖥️" : "📷") : ""}`;
 }
 
 function startCallTimer() {
     if (state.call.timer) clearInterval(state.call.timer);
     state.call.timer = setInterval(() => {
-        const sec = Math.floor((Date.now() - state.call.startedAt) / 1000);
         const el = qs("callTimer");
-        if (el) el.textContent = fmtDuration(sec);
+        if (el)
+            el.textContent = fmtDuration(
+                Math.floor((Date.now() - state.call.startedAt) / 1000),
+            );
     }, 1000);
 }
 
@@ -1604,416 +1681,368 @@ function updateCallButtons() {
     const btnMic = qs("btnToggleMic");
     const btnCam = qs("btnToggleCam");
     const btnScreen = qs("btnShareScreen");
-    
+    const btnRotate = qs("btnRotateCam");
     if (btnMic) {
         btnMic.textContent = state.call.mic ? "🎤" : "🔇";
-        btnMic.title = state.call.mic ? "Выключить микрофон" : "Включить микрофон";
+        btnMic.title = state.call.mic
+            ? "Выключить микрофон"
+            : "Включить микрофон";
     }
-    
     if (btnCam) {
-        btnCam.textContent = state.call.cam ? (state.call.screen ? "🖥️" : "📷") : "🚫";
+        btnCam.textContent = state.call.cam
+            ? state.call.screen
+                ? "🖥️"
+                : "📷"
+            : "🚫";
         btnCam.title = state.call.cam ? "Выключить камеру" : "Включить камеру";
     }
-    
     if (btnScreen) {
-        const canShare = !isMobile && !!navigator.mediaDevices.getDisplayMedia;
+        const canShare = !isMobile && !!navigator.mediaDevices?.getDisplayMedia;
         btnScreen.textContent = state.call.screen ? "🖥️" : "🪟";
         btnScreen.disabled = !canShare;
-        if (!canShare) hide(btnScreen); else show(btnScreen);
+        canShare ? show(btnScreen) : hide(btnScreen);
+    }
+    if (btnRotate) {
+        if (isMobile && state.call.active) show(btnRotate);
+        else hide(btnRotate);
     }
 }
 
-async function rotateCamera() {
-    if (!isMobile) return;
-    
-    state.devicePrefs.camFacing = state.devicePrefs.camFacing === "environment" ? "user" : "environment";
-    
-    if (state.call.cam && !state.call.screen) {
-        // Перезапускаем камеру с новым facingMode
-        const videoTrack = state.call.localStream?.getVideoTracks()[0];
-        if (videoTrack) {
-            videoTrack.stop();
-            state.call.localStream.removeTrack(videoTrack);
-            
-            try {
-                const stream = await navigator.mediaDevices.getUserMedia({
-                    video: {
-                        facingMode: { exact: state.devicePrefs.camFacing }
-                    }
-                });
-                const newTrack = stream.getVideoTracks()[0];
-                state.call.localStream.addTrack(newTrack);
-                
-                state.call.peers.forEach(async (pc) => {
-                    const sender = pc.getSenders().find(s => s.track?.kind === "video");
-                    if (sender) await sender.replaceTrack(newTrack);
-                });
-                
-                const localTile = state.call.tiles.get(state.me?.id);
-                if (localTile) {
-                    localTile.video.srcObject = new MediaStream([newTrack]);
-                    playMediaWithRetry(localTile.video);
-                }
-            } catch (e) {
-                console.error("Failed to rotate camera:", e);
-            }
-        }
-    }
-}
-
-// === ОБРАБОТКА WS СОБЫТИЙ ЗВОНКА ===
-
+// ─── WS-обработчик событий звонка ────────────────────────────────────────────
 function handleCallWebSocketMessage(msg) {
-    switch(msg.type) {
-        case "call:participants":
-            // Есть другие участники
-            const others = msg.payload.users || [];
+    // call:ring разрешён даже без активного звонка
+    if (msg.type === "call:ring") {
+        const chat = state.chats.find((c) => c.id === msg.payload.chat_id);
+        state.ui.incomingCall = {
+            chatId: msg.payload.chat_id,
+            title: chat?.title || chat?.peer?.nickname || "Входящий звонок",
+        };
+        const el = qs("incomingCallText");
+        if (el)
+            el.textContent = `Входящий звонок: ${state.ui.incomingCall.title}`;
+        show(qs("incomingCallToast"));
+        return;
+    }
+
+    if (!state.call.active) return;
+
+    switch (msg.type) {
+        case "call:participants": {
+            const others = (msg.payload.users || []).map(Number);
             const states = msg.payload.states || {};
-            
             others.forEach(async (uid) => {
-                const userId = Number(uid);
-                const isInitiator = state.me.id < userId;
-                await createPeerConnection(userId, isInitiator);
-                
-                if (states[userId]) {
-                    // Обновляем UI состояния
-                    const tile = state.call.tiles.get(userId);
-                    if (tile) {
-                        tile.stateSpan.textContent = `${states[userId].mic ? '🎤' : '🔇'} ${states[userId].cam ? '📷' : ''}`;
-                    }
-                }
+                if (uid === state.me?.id) return;
+                setRemoteTileState(uid, states[uid]);
+                // Инициатор — у кого меньший ID
+                if (state.me.id < uid) await createOfferPeer(uid);
             });
             break;
-            
-        case "call:user_joined":
-            // Новый участник
-            const newUserId = Number(msg.payload.user_id);
-            const isInitiator = state.me.id < newUserId;
-            createPeerConnection(newUserId, isInitiator);
-            
-            // Обновляем UI
-            const tile = state.call.tiles.get(newUserId);
-            if (tile && msg.payload.state) {
-                tile.stateSpan.textContent = `${msg.payload.state.mic ? '🎤' : '🔇'} ${msg.payload.state.cam ? '📷' : ''}`;
-            }
+        }
+        case "call:user_joined": {
+            const uid = Number(msg.payload.user_id);
+            if (uid === state.me?.id) break;
+            setRemoteTileState(uid, msg.payload.state);
+            if (state.me.id < uid) createOfferPeer(uid);
             break;
-            
+        }
         case "call:user_left":
-            removePeer(msg.payload.user_id);
+            removePeer(Number(msg.payload.user_id));
             break;
-            
         case "call:signal":
-            handleCallSignal(msg.payload.from_user, msg.payload.signal);
+            handleCallSignal(Number(msg.payload.from_user), msg.payload.signal);
             break;
-            
         case "call:user_state":
-            const uid = msg.payload.user_id;
-            const s = msg.payload.state;
-            const t = state.call.tiles.get(uid);
-            if (t) {
-                t.stateSpan.textContent = `${s.mic ? '🎤' : '🔇'} ${s.cam ? (s.screen ? '🖥️' : '📷') : ''}`;
-            }
-            break;
-            
-        case "call:ring":
-            // Входящий звонок
-            const chat = state.chats.find((c) => c.id === msg.payload.chat_id);
-            state.ui.incomingCall = { 
-                chatId: msg.payload.chat_id, 
-                title: chat?.title || "Входящий звонок" 
-            };
-            const incomingText = qs("incomingCallText");
-            if (incomingText) incomingText.textContent = `Входящий звонок: ${state.ui.incomingCall.title}`;
-            show(qs("incomingCallToast"));
+            setRemoteTileState(
+                Number(msg.payload.user_id),
+                msg.payload.state || {},
+            );
             break;
     }
-}
-
-function removePeer(userId) {
-    const pc = state.call.peers.get(userId);
-    if (pc) {
-        pc.close();
-        state.call.peers.delete(userId);
-    }
-    
-    const tile = state.call.tiles.get(userId);
-    if (tile) {
-        tile.tile.remove();
-        state.call.tiles.delete(userId);
-    }
-    
-    state.call.remoteStreams.delete(userId);
-    state.call.pendingCandidates.delete(userId);
-    
-    optimizeCallLayout();
 }
 
 // =============================================================================
 // === КОНЕЦ ЛОГИКИ ЗВОНКОВ ===
 // =============================================================================
 
-function stopWsHeartbeat() {
-    if (state.wsMeta.pingTimer) {
-        clearInterval(state.wsMeta.pingTimer);
-        state.wsMeta.pingTimer = null;
+// ─── Устройства ──────────────────────────────────────────────────────────────
+
+async function listMediaDevices() {
+    try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        return {
+            mics: devices.filter((d) => d.kind === "audioinput"),
+            cams: devices.filter((d) => d.kind === "videoinput"),
+            speakers: devices.filter((d) => d.kind === "audiooutput"),
+        };
+    } catch {
+        return { mics: [], cams: [], speakers: [] };
     }
-    if (state.wsMeta.pongTimer) {
-        clearTimeout(state.wsMeta.pongTimer);
-        state.wsMeta.pongTimer = null;
-    }
 }
 
-function scheduleWsReconnect() {
-    if (state.wsMeta.reconnectTimer) return;
-    const delay = Math.min(6000, 900 + state.wsMeta.retry * 450);
-    state.wsMeta.retry += 1;
-    state.wsMeta.reconnectTimer = setTimeout(() => {
-        state.wsMeta.reconnectTimer = null;
-        connectWs();
-    }, delay);
-}
-
-function startWsHeartbeat() {
-    stopWsHeartbeat();
-    state.wsMeta.pingTimer = setInterval(() => {
-        if (!state.ws || state.ws.readyState !== WebSocket.OPEN) return;
-        state.ws.send(JSON.stringify({ type: "ping" }));
-        if (state.wsMeta.pongTimer) clearTimeout(state.wsMeta.pongTimer);
-        state.wsMeta.pongTimer = setTimeout(() => {
-            try {
-                state.ws.close();
-            } catch (_) {}
-        }, 9000);
-    }, 15000);
-}
-
-function resetCallPeersForRejoin() {
-    state.call.peers.forEach((pc, uid) => {
-        pc.close();
+function fillSelect(selectEl, devices, selectedId, fallbackLabel) {
+    if (!selectEl) return;
+    selectEl.innerHTML = "";
+    const auto = document.createElement("option");
+    auto.value = "";
+    auto.textContent = fallbackLabel;
+    selectEl.appendChild(auto);
+    devices.forEach((d) => {
+        const opt = document.createElement("option");
+        opt.value = d.deviceId;
+        opt.textContent = d.label || d.deviceId.slice(0, 8);
+        if (selectedId && selectedId === d.deviceId) opt.selected = true;
+        selectEl.appendChild(opt);
     });
-    state.call.peers.clear();
-    
-    const grid = qs("callGrid");
-    if (grid) grid.innerHTML = "";
-    state.call.tiles.clear();
-    
-    // Пересоздаём локальный tile
-    if (state.call.localStream) {
-        const localTile = createCallTile(state.me?.id, true);
-        if (localTile) {
-            localTile.video.srcObject = new MediaStream(state.call.localStream.getTracks());
-            playMediaWithRetry(localTile.video);
-            state.call.tiles.set(state.me?.id, localTile);
+}
+
+async function refreshDevicePanel() {
+    try {
+        await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+    } catch (_) {}
+    const { mics, cams, speakers } = await listMediaDevices();
+    fillSelect(
+        qs("selMic"),
+        mics,
+        state.devicePrefs.micId,
+        "Системный микрофон",
+    );
+    fillSelect(qs("selCam"), cams, state.devicePrefs.camId, "Системная камера");
+    fillSelect(
+        qs("selSpeaker"),
+        speakers,
+        state.devicePrefs.speakerId,
+        "Системный вывод",
+    );
+    const speakerSel = qs("selSpeaker");
+    if (speakerSel) {
+        if (!("setSinkId" in HTMLMediaElement.prototype)) {
+            speakerSel.disabled = true;
+            speakerSel.title = "Safari/iOS ограничивает выбор аудиовыхода";
+        } else {
+            speakerSel.disabled = false;
+            speakerSel.title = "";
         }
     }
+    const modeSel = qs("selAudioMode");
+    if (modeSel) modeSel.value = state.devicePrefs.audioMode || "speaker";
 }
 
-async function syncCurrentChatIfOpen() {
-    if (!state.currentChatId) return;
-    if (state.ws && state.ws.readyState === WebSocket.OPEN) return;
-    
-    const prev = qs("messages");
-    if (!prev) return;
-    const atBottom = prev.scrollHeight - prev.scrollTop - prev.clientHeight < 60;
-    
+async function applySpeakerToMedia(mediaEl) {
+    if (!mediaEl || typeof mediaEl.setSinkId !== "function") return;
     try {
-        const data = await api(`/api/chats/${state.currentChatId}/messages`);
-        const existingIds = new Set(
-            Array.from(prev.querySelectorAll("[data-mid]")).map(el => Number(el.dataset.mid))
-        );
-        let added = 0;
-        data.forEach(m => {
-            if (!existingIds.has(m.id)) { appendMessage(m); added++; }
-        });
-        if (added > 0 && atBottom) prev.scrollTop = prev.scrollHeight;
+        await mediaEl.setSinkId(state.devicePrefs.speakerId || "");
     } catch (_) {}
 }
 
-function startFallbackSync() {
-    if (state.syncTimer) clearInterval(state.syncTimer);
-    state.syncTimer = setInterval(async () => {
-        try {
-            await Promise.all([loadChats(), loadFriends(), loadFriendRequests()]);
-            await loadGroupInvites();
-            await syncCurrentChatIfOpen();
-        } catch (_) {}
-    }, 12000);
-}
-
-function connectWs() {
-    if (!state.token) return;
-    if (state.ws && (state.ws.readyState === WebSocket.OPEN || state.ws.readyState === WebSocket.CONNECTING)) {
-        return;
+async function applySpeakerToAllTiles() {
+    for (const [uid, card] of state.call.tiles.entries()) {
+        if (uid === state.me?.id) continue;
+        if (card.audio) await applySpeakerToMedia(card.audio);
+        if (card.video) await applySpeakerToMedia(card.video);
     }
-    const proto = location.protocol === "https:" ? "wss" : "ws";
-    const ws = new WebSocket(`${proto}://${location.host}/ws?token=${encodeURIComponent(state.token)}`);
-    state.ws = ws;
-    ws.onopen = async () => {
-        state.wsMeta.retry = 0;
-        stopWsHeartbeat();
-        startWsHeartbeat();
-        try {
-            await Promise.all([loadChats(), loadFriends(), loadFriendRequests()]);
-            await syncCurrentChatIfOpen();
-        } catch (_) {}
-        
-        // Восстанавливаем звонок если был
-        if (state.call.active && state.call.chatId) {
-            resetCallPeersForRejoin();
-            ws.send(JSON.stringify({
-                type: "call:join",
-                chat_id: state.call.chatId,
-                mic: state.call.mic,
-                cam: state.call.cam,
-                screen: state.call.screen,
-            }));
-        }
-    };
-    ws.onmessage = async (ev) => {
-        let msg;
-        try { msg = JSON.parse(ev.data); } catch(e) { return; }
-        
-        if (msg.type === "pong") {
-            if (state.wsMeta.pongTimer) {
-                clearTimeout(state.wsMeta.pongTimer);
-                state.wsMeta.pongTimer = null;
-            }
-            return;
-        }
-        
-        // Сообщения
-        if (msg.type === "message:new") {
-            if (msg.payload.chat_id === state.currentChatId) {
-                appendMessage(msg.payload);
-                if (msg.payload.user_id !== state.me?.id) markChatRead(state.currentChatId);
-            }
-            loadChats();
-        }
-        if (msg.type === "message:read") {
-            const { chat_id, reader_id, up_to_id } = msg.payload;
-            if (reader_id !== state.me?.id && chat_id === state.currentChatId) {
-                updateReadStatusUpTo(up_to_id);
-            }
-        }
-        if (msg.type === "message:deleted_all") {
-            if (msg.payload.chat_id === state.currentChatId) removeMessageById(msg.payload.message_id);
-            loadChats();
-        }
-        if (msg.type === "message:deleted_me") {
-            if (msg.payload.chat_id === state.currentChatId) removeMessageById(msg.payload.message_id);
-            loadChats();
-        }
-        
-        // Друзья и группы
-        if (msg.type === "friend:request" || msg.type === "friend:accepted" || msg.type === "chat:added") {
-            refreshSide();
-        }
-        if (msg.type === "group:invite" || msg.type === "group:invite_answer") {
-            loadGroupInvites();
-        }
-        if (msg.type === "group:deleted") {
-            if (state.currentChatId === msg.payload.chat_id) {
-                state.currentChatId = null;
-                state.currentChat = null;
-                const msgEl = qs("messages");
-                const memEl = qs("chatMembers");
-                if (msgEl) msgEl.innerHTML = "";
-                if (memEl) memEl.innerHTML = "";
-                setChatHeader(null);
-                setChatOpen(false);
-            }
-            refreshSide();
-        }
-        if (msg.type === "group:member_removed") {
-            if (msg.payload.user_id === state.me?.id && state.currentChatId === msg.payload.chat_id) {
-                state.currentChatId = null;
-                state.currentChat = null;
-                const msgEl = qs("messages");
-                const memEl = qs("chatMembers");
-                if (msgEl) msgEl.innerHTML = "";
-                if (memEl) memEl.innerHTML = "";
-                setChatHeader(null);
-                setChatOpen(false);
-            }
-            if (state.currentChatId === msg.payload.chat_id) {
-                loadMembers(msg.payload.chat_id);
-            }
-            refreshSide();
-        }
-        if (msg.type === "group:member_role") {
-            if (state.currentChatId === msg.payload.chat_id) {
-                loadMembers(msg.payload.chat_id);
-            }
-            loadChats();
-        }
-        if (msg.type === "user:blocked") {
-            refreshSide();
-        }
-        
-        // === ЗВОНКИ ===
-        handleCallWebSocketMessage(msg);
-    };
-    ws.onclose = () => {
-        stopWsHeartbeat();
-        scheduleWsReconnect();
-    };
-    ws.onerror = () => {
-        try {
-            ws.close();
-        } catch (_) {}
-    };
 }
 
-async function ensureSession() {
-    if (!state.token) return false;
+async function switchMicDevice(deviceId) {
+    state.devicePrefs.micId = deviceId || "";
+    if (!state.call.active) return;
     try {
-        state.me
-state.me = await api("/api/me");
-        return true;
-    } catch (_) {
-        localStorage.removeItem("token");
-        state.token = "";
-        return false;
+        const stream = await navigator.mediaDevices.getUserMedia({
+            audio: state.devicePrefs.micId
+                ? { deviceId: { exact: state.devicePrefs.micId } }
+                : true,
+            video: false,
+        });
+        const newTrack = stream.getAudioTracks()[0];
+        if (!newTrack) return;
+        newTrack.enabled = state.call.mic;
+        state.call.localStream?.getAudioTracks().forEach((t) => {
+            t.stop();
+            state.call.localStream.removeTrack(t);
+        });
+        state.call.localStream?.addTrack(newTrack);
+        for (const pc of state.call.peers.values()) {
+            const sender = pc
+                .getSenders()
+                .find((s) => s.track?.kind === "audio");
+            if (sender) await sender.replaceTrack(newTrack);
+        }
+    } catch (e) {
+        console.error("switchMicDevice failed:", e);
     }
 }
 
-async function loadSettings() {
-    state.settings = await api("/api/settings");
-    const setFriendReq = qs("setFriendReq");
-    const setCalls = qs("setCalls");
-    const setInvites = qs("setInvites");
-    const setLastSeen = qs("setLastSeen");
-    if (setFriendReq) setFriendReq.value = state.settings.allow_friend_requests;
-    if (setCalls) setCalls.value = state.settings.allow_calls_from;
-    if (setInvites) setInvites.value = state.settings.allow_group_invites;
-    if (setLastSeen) setLastSeen.value = state.settings.show_last_seen;
+async function switchCamDevice(deviceId) {
+    state.devicePrefs.camId = deviceId || "";
+    if (!state.call.active || !state.call.cam) return;
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+            video: state.devicePrefs.camId
+                ? { deviceId: { exact: state.devicePrefs.camId } }
+                : true,
+        });
+        const newTrack = stream.getVideoTracks()[0];
+        if (!newTrack) return;
+        state.call.localStream?.getVideoTracks().forEach((t) => {
+            t.stop();
+            state.call.localStream.removeTrack(t);
+        });
+        state.call.localStream?.addTrack(newTrack);
+        for (const pc of state.call.peers.values()) {
+            const sender = pc
+                .getSenders()
+                .find((s) => s.track?.kind === "video");
+            if (sender) await sender.replaceTrack(newTrack);
+        }
+        const localCard = state.call.tiles.get(state.me?.id);
+        if (localCard) {
+            localCard.video.srcObject = new MediaStream(
+                state.call.localStream.getTracks(),
+            );
+            safePlayMedia(localCard.video, true);
+        }
+    } catch (e) {
+        console.error("switchCamDevice failed:", e);
+    }
 }
 
-async function onAuthorized() {
-    hide(qs("gateScreen"));
-    hide(qs("authScreen"));
-    show(qs("app"));
-    renderProfileMini();
-    await Promise.all([loadChats(), loadFriends(), loadFriendRequests(), loadGroupInvites(), loadSettings()]);
-    connectWs();
-    startFallbackSync();
+async function applyAudioMode(mode) {
+    state.devicePrefs.audioMode = mode || "speaker";
+    const audioSession = navigator.audioSession;
+    if (audioSession && "type" in audioSession) {
+        try {
+            audioSession.type =
+                mode === "phone" ? "play-and-record" : "playback";
+        } catch (_) {}
+    }
+    await applySpeakerToAllTiles();
 }
 
-function resetToAuthUi() {
-    hide(qs("app"));
-    show(qs("authScreen"));
-    hide(qs("gateScreen"));
-    setError("authError", "");
-    setError("gateError", "");
-    state.me = null;
-    state.settings = null;
-    state.chats = [];
-    state.friends = [];
-    state.currentChat = null;
-    state.currentChatId = null;
+// ─── Контекстное меню сообщений ──────────────────────────────────────────────
+
+let _ctxMenuEl = null;
+let _ctxLongPressTimer = null;
+
+function hideContextMenu() {
+    if (_ctxMenuEl) {
+        _ctxMenuEl.remove();
+        _ctxMenuEl = null;
+    }
 }
 
-// ─── Панель участников ───────────────────────────────────────────────────────
+function showMessageContextMenu(x, y, msgEl) {
+    hideContextMenu();
+    const mid = Number(msgEl.dataset.mid);
+    const isMine = msgEl.dataset.mine === "1";
+    if (!mid) return;
+
+    const menu = document.createElement("div");
+    menu.className = "msg-ctx-menu";
+    menu.style.cssText = `position:fixed;z-index:200;left:${x}px;top:${y}px`;
+    _ctxMenuEl = menu;
+
+    const btnDelMe = document.createElement("button");
+    btnDelMe.textContent = "🗑️ Удалить у себя";
+    btnDelMe.onclick = async () => {
+        hideContextMenu();
+        try {
+            await api(`/api/messages/${mid}?mode=me`, { method: "DELETE" });
+            msgEl.remove();
+        } catch (e) {
+            alert(e.message);
+        }
+    };
+    menu.appendChild(btnDelMe);
+
+    if (isMine) {
+        const btnDelAll = document.createElement("button");
+        btnDelAll.textContent = "🗑️ Удалить у всех";
+        btnDelAll.onclick = async () => {
+            hideContextMenu();
+            if (!confirm("Удалить сообщение у всех?")) return;
+            try {
+                await api(`/api/messages/${mid}?mode=all`, {
+                    method: "DELETE",
+                });
+            } catch (e) {
+                alert(e.message);
+            }
+        };
+        menu.appendChild(btnDelAll);
+    }
+
+    document.body.appendChild(menu);
+    const rect = menu.getBoundingClientRect();
+    if (rect.right > window.innerWidth - 8)
+        menu.style.left = `${window.innerWidth - rect.width - 8}px`;
+    if (rect.bottom > window.innerHeight - 8)
+        menu.style.top = `${y - rect.height}px`;
+    setTimeout(
+        () =>
+            document.addEventListener("click", hideContextMenu, { once: true }),
+        0,
+    );
+}
+
+function bindMessageContextMenu(container) {
+    container.addEventListener("contextmenu", (e) => {
+        const msgEl = e.target.closest(".message[data-mid]");
+        if (!msgEl) return;
+        e.preventDefault();
+        showMessageContextMenu(e.clientX, e.clientY, msgEl);
+    });
+    container.addEventListener(
+        "touchstart",
+        (e) => {
+            const msgEl = e.target.closest(".message[data-mid]");
+            if (!msgEl) return;
+            const touch = e.touches[0];
+            _ctxLongPressTimer = setTimeout(() => {
+                if (navigator.vibrate) navigator.vibrate(30);
+                showMessageContextMenu(touch.clientX, touch.clientY, msgEl);
+            }, 550);
+        },
+        { passive: true },
+    );
+    container.addEventListener(
+        "touchend",
+        () => clearTimeout(_ctxLongPressTimer),
+        { passive: true },
+    );
+    container.addEventListener(
+        "touchmove",
+        () => clearTimeout(_ctxLongPressTimer),
+        { passive: true },
+    );
+}
+
+// ─── Вставка изображения из буфера обмена ────────────────────────────────────
+
+function bindClipboardPaste(inputEl) {
+    inputEl.addEventListener("paste", async (e) => {
+        if (!state.currentChatId) return;
+        const items = e.clipboardData?.items;
+        if (!items) return;
+        for (const item of items) {
+            if (item.type.startsWith("image/")) {
+                const file = item.getAsFile();
+                if (!file) continue;
+                e.preventDefault();
+                const ext = item.type.split("/")[1] || "png";
+                const named = new File([file], `paste_${Date.now()}.${ext}`, {
+                    type: item.type,
+                });
+                try {
+                    await sendMessage({ file: named, kind: "image" });
+                } catch (err) {
+                    console.error("Paste send error:", err);
+                }
+                return;
+            }
+        }
+    });
+}
+
+// ─── Панель участников ────────────────────────────────────────────────────────
 
 function openMembersSheet() {
     const panel = qs("groupMembersPanel");
@@ -2058,232 +2087,298 @@ function _membersEscHandler(e) {
     if (e.key === "Escape") closeMembersSheet();
 }
 
-// ─── Устройства ──────────────────────────────────────────────────────────────
+// ─── WebSocket ────────────────────────────────────────────────────────────────
 
-async function listMediaDevices() {
-    try {
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        return {
-            mics: devices.filter(d => d.kind === "audioinput"),
-            cams: devices.filter(d => d.kind === "videoinput"),
-            speakers: devices.filter(d => d.kind === "audiooutput"),
-        };
-    } catch {
-        return { mics: [], cams: [], speakers: [] };
+function stopWsHeartbeat() {
+    if (state.wsMeta.pingTimer) {
+        clearInterval(state.wsMeta.pingTimer);
+        state.wsMeta.pingTimer = null;
+    }
+    if (state.wsMeta.pongTimer) {
+        clearTimeout(state.wsMeta.pongTimer);
+        state.wsMeta.pongTimer = null;
     }
 }
 
-function fillSelect(selectEl, devices, selectedId, fallbackLabel) {
-    if (!selectEl) return;
-    selectEl.innerHTML = "";
-    const auto = document.createElement("option");
-    auto.value = "";
-    auto.textContent = fallbackLabel;
-    selectEl.appendChild(auto);
-    devices.forEach(d => {
-        const opt = document.createElement("option");
-        opt.value = d.deviceId;
-        opt.textContent = d.label || d.deviceId.slice(0, 8);
-        if (selectedId && selectedId === d.deviceId) opt.selected = true;
-        selectEl.appendChild(opt);
-    });
+function scheduleWsReconnect() {
+    if (state.wsMeta.reconnectTimer) return;
+    const delay = Math.min(6000, 900 + state.wsMeta.retry * 450);
+    state.wsMeta.retry += 1;
+    state.wsMeta.reconnectTimer = setTimeout(() => {
+        state.wsMeta.reconnectTimer = null;
+        connectWs();
+    }, delay);
 }
 
-async function refreshDevicePanel() {
-    try { await navigator.mediaDevices.getUserMedia({ audio: true, video: true }); } catch (_) {}
-    const { mics, cams, speakers } = await listMediaDevices();
-    fillSelect(qs("selMic"), mics, state.devicePrefs.micId, "Системный микрофон");
-    fillSelect(qs("selCam"), cams, state.devicePrefs.camId, "Системная камера");
-    fillSelect(qs("selSpeaker"), speakers, state.devicePrefs.speakerId, "Системный вывод");
-    const speakerSelect = qs("selSpeaker");
-    if (speakerSelect) {
-        if (!("setSinkId" in HTMLMediaElement.prototype)) {
-            speakerSelect.disabled = true;
-            speakerSelect.title = "Safari/iOS ограничивает выбор аудиовыхода";
-        } else {
-            speakerSelect.disabled = false;
-            speakerSelect.title = "";
+function startWsHeartbeat() {
+    stopWsHeartbeat();
+    state.wsMeta.pingTimer = setInterval(() => {
+        if (!state.ws || state.ws.readyState !== WebSocket.OPEN) return;
+        state.ws.send(JSON.stringify({ type: "ping" }));
+        if (state.wsMeta.pongTimer) clearTimeout(state.wsMeta.pongTimer);
+        state.wsMeta.pongTimer = setTimeout(() => {
+            try {
+                state.ws.close();
+            } catch (_) {}
+        }, 9000);
+    }, 15000);
+}
+
+function resetCallPeersForRejoin() {
+    state.call.peers.forEach((pc) => pc.close());
+    state.call.peers.clear();
+    state.call.pendingCandidates.clear();
+
+    const grid = qs("callGrid");
+    if (grid) grid.innerHTML = "";
+    state.call.tiles.clear();
+
+    if (state.call.localStream) {
+        const localCard = createCallTile(state.me?.id, true);
+        if (localCard) {
+            localCard.video.srcObject = new MediaStream(
+                state.call.localStream.getTracks(),
+            );
+            safePlayMedia(localCard.video, true);
+            state.call.tiles.set(state.me?.id, localCard);
         }
     }
-    const modeSelect = qs("selAudioMode");
-    if (modeSelect) modeSelect.value = state.devicePrefs.audioMode || "speaker";
 }
 
-async function applySpeakerToMedia(mediaEl) {
-    if (!mediaEl || typeof mediaEl.setSinkId !== "function") return;
-    try { await mediaEl.setSinkId(state.devicePrefs.speakerId || ""); } catch (_) {}
-}
-
-async function applySpeakerToAllTiles() {
-    for (const [uid, card] of state.call.tiles.entries()) {
-        if (uid === state.me?.id) continue;
-        await applySpeakerToMedia(card.video);
-        await applySpeakerToMedia(card.audio);
-    }
-}
-
-async function switchMicDevice(deviceId) {
-    state.devicePrefs.micId = deviceId || "";
-    if (!state.call.active) return;
+async function syncCurrentChatIfOpen() {
+    if (!state.currentChatId) return;
+    if (state.ws && state.ws.readyState === WebSocket.OPEN) return;
+    const prev = qs("messages");
+    if (!prev) return;
+    const atBottom =
+        prev.scrollHeight - prev.scrollTop - prev.clientHeight < 60;
     try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-            audio: state.devicePrefs.micId ? { deviceId: { exact: state.devicePrefs.micId } } : true,
-            video: false,
-        });
-        const newTrack = stream.getAudioTracks()[0];
-        if (!newTrack) return;
-        newTrack.enabled = state.call.mic;
-        state.call.localStream?.getAudioTracks().forEach(t => {
-            t.stop();
-            state.call.localStream.removeTrack(t);
-        });
-        state.call.localStream?.addTrack(newTrack);
-        state.call.peers.forEach(async pc => {
-            const sender = pc.getSenders().find(s => s.track?.kind === "audio");
-            if (sender) await sender.replaceTrack(newTrack);
-        });
-    } catch (e) {
-        console.error("Failed to switch mic:", e);
-    }
-}
-
-async function switchCamDevice(deviceId) {
-    state.devicePrefs.camId = deviceId || "";
-    if (!state.call.active || !state.call.cam) return;
-    try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-            video: state.devicePrefs.camId
-                ? { deviceId: { exact: state.devicePrefs.camId } }
-                : true,
-        });
-        const newTrack = stream.getVideoTracks()[0];
-        if (!newTrack) return;
-        state.call.localStream?.getVideoTracks().forEach(t => {
-            t.stop();
-            state.call.localStream.removeTrack(t);
-        });
-        state.call.localStream?.addTrack(newTrack);
-        state.call.peers.forEach(async pc => {
-            const sender = pc.getSenders().find(s => s.track?.kind === "video");
-            if (sender) await sender.replaceTrack(newTrack);
-        });
-        const localTile = state.call.tiles.get(state.me?.id);
-        if (localTile) {
-            localTile.video.srcObject = new MediaStream(state.call.localStream.getTracks());
-            playMediaWithRetry(localTile.video);
-        }
-    } catch (e) {
-        console.error("Failed to switch cam:", e);
-    }
-}
-
-async function applyAudioMode(mode) {
-    state.devicePrefs.audioMode = mode || "speaker";
-    const audioSession = navigator.audioSession;
-    if (audioSession && "type" in audioSession) {
-        try {
-            audioSession.type = state.devicePrefs.audioMode === "phone" ? "play-and-record" : "playback";
-        } catch (_) {}
-    }
-    await applySpeakerToAllTiles();
-}
-
-// ─── Контекстное меню сообщений ──────────────────────────────────────────────
-
-let _ctxMenuEl = null;
-let _ctxLongPressTimer = null;
-
-function hideContextMenu() {
-    if (_ctxMenuEl) { _ctxMenuEl.remove(); _ctxMenuEl = null; }
-}
-
-function showMessageContextMenu(x, y, msgEl) {
-    hideContextMenu();
-    const mid = Number(msgEl.dataset.mid);
-    const isMine = msgEl.dataset.mine === "1";
-    if (!mid) return;
-
-    const menu = document.createElement("div");
-    menu.className = "msg-ctx-menu";
-    menu.style.cssText = `position:fixed;z-index:200;left:${x}px;top:${y}px`;
-    _ctxMenuEl = menu;
-
-    const btnDelMe = document.createElement("button");
-    btnDelMe.textContent = "🗑️ Удалить у себя";
-    btnDelMe.onclick = async () => {
-        hideContextMenu();
-        try {
-            await api(`/api/messages/${mid}?mode=me`, { method: "DELETE" });
-            msgEl.remove();
-        } catch (e) { alert(e.message); }
-    };
-    menu.appendChild(btnDelMe);
-
-    if (isMine) {
-        const btnDelAll = document.createElement("button");
-        btnDelAll.textContent = "🗑️ Удалить у всех";
-        btnDelAll.onclick = async () => {
-            hideContextMenu();
-            if (!confirm("Удалить сообщение у всех?")) return;
-            try { await api(`/api/messages/${mid}?mode=all`, { method: "DELETE" }); }
-            catch (e) { alert(e.message); }
-        };
-        menu.appendChild(btnDelAll);
-    }
-
-    document.body.appendChild(menu);
-
-    const rect = menu.getBoundingClientRect();
-    if (rect.right > window.innerWidth - 8) {
-        menu.style.left = `${window.innerWidth - rect.width - 8}px`;
-    }
-    if (rect.bottom > window.innerHeight - 8) {
-        menu.style.top = `${y - rect.height}px`;
-    }
-
-    setTimeout(() => document.addEventListener("click", hideContextMenu, { once: true }), 0);
-}
-
-function bindMessageContextMenu(container) {
-    container.addEventListener("contextmenu", e => {
-        const msgEl = e.target.closest(".message[data-mid]");
-        if (!msgEl) return;
-        e.preventDefault();
-        showMessageContextMenu(e.clientX, e.clientY, msgEl);
-    });
-    container.addEventListener("touchstart", e => {
-        const msgEl = e.target.closest(".message[data-mid]");
-        if (!msgEl) return;
-        const touch = e.touches[0];
-        _ctxLongPressTimer = setTimeout(() => {
-            if (navigator.vibrate) navigator.vibrate(30);
-            showMessageContextMenu(touch.clientX, touch.clientY, msgEl);
-        }, 550);
-    }, { passive: true });
-    container.addEventListener("touchend", () => clearTimeout(_ctxLongPressTimer), { passive: true });
-    container.addEventListener("touchmove", () => clearTimeout(_ctxLongPressTimer), { passive: true });
-}
-
-// ─── Вставка из буфера обмена ────────────────────────────────────────────────
-
-function bindClipboardPaste(inputEl) {
-    inputEl.addEventListener("paste", async e => {
-        if (!state.currentChatId) return;
-        const items = e.clipboardData?.items;
-        if (!items) return;
-        for (const item of items) {
-            if (item.type.startsWith("image/")) {
-                const file = item.getAsFile();
-                if (!file) continue;
-                e.preventDefault();
-                const ext = item.type.split("/")[1] || "png";
-                const named = new File([file], `paste_${Date.now()}.${ext}`, { type: item.type });
-                try { await sendMessage({ file: named, kind: "image" }); }
-                catch (err) { console.error("Paste send error:", err); }
-                return;
+        const data = await api(`/api/chats/${state.currentChatId}/messages`);
+        const existingIds = new Set(
+            Array.from(prev.querySelectorAll("[data-mid]")).map((el) =>
+                Number(el.dataset.mid),
+            ),
+        );
+        let added = 0;
+        data.forEach((m) => {
+            if (!existingIds.has(m.id)) {
+                appendMessage(m);
+                added++;
             }
+        });
+        if (added > 0 && atBottom) prev.scrollTop = prev.scrollHeight;
+    } catch (_) {}
+}
+
+function startFallbackSync() {
+    if (state.syncTimer) clearInterval(state.syncTimer);
+    state.syncTimer = setInterval(async () => {
+        try {
+            await Promise.all([
+                loadChats(),
+                loadFriends(),
+                loadFriendRequests(),
+            ]);
+            await loadGroupInvites();
+            await syncCurrentChatIfOpen();
+        } catch (_) {}
+    }, 12000);
+}
+
+function connectWs() {
+    if (!state.token) return;
+    if (
+        state.ws &&
+        (state.ws.readyState === WebSocket.OPEN ||
+            state.ws.readyState === WebSocket.CONNECTING)
+    )
+        return;
+    const proto = location.protocol === "https:" ? "wss" : "ws";
+    const ws = new WebSocket(
+        `${proto}://${location.host}/ws?token=${encodeURIComponent(state.token)}`,
+    );
+    state.ws = ws;
+
+    ws.onopen = async () => {
+        state.wsMeta.retry = 0;
+        stopWsHeartbeat();
+        startWsHeartbeat();
+        try {
+            await Promise.all([
+                loadChats(),
+                loadFriends(),
+                loadFriendRequests(),
+            ]);
+            await syncCurrentChatIfOpen();
+        } catch (_) {}
+        if (state.call.active && state.call.chatId) {
+            resetCallPeersForRejoin();
+            ws.send(
+                JSON.stringify({
+                    type: "call:join",
+                    chat_id: state.call.chatId,
+                    mic: state.call.mic,
+                    cam: state.call.cam,
+                    screen: state.call.screen,
+                }),
+            );
         }
-    });
+    };
+
+    ws.onmessage = async (ev) => {
+        let msg;
+        try {
+            msg = JSON.parse(ev.data);
+        } catch {
+            return;
+        }
+
+        if (msg.type === "pong") {
+            if (state.wsMeta.pongTimer) {
+                clearTimeout(state.wsMeta.pongTimer);
+                state.wsMeta.pongTimer = null;
+            }
+            return;
+        }
+
+        if (msg.type === "message:new") {
+            if (msg.payload.chat_id === state.currentChatId) {
+                appendMessage(msg.payload);
+                if (msg.payload.user_id !== state.me?.id)
+                    markChatRead(state.currentChatId);
+            }
+            loadChats();
+        }
+        if (msg.type === "message:read") {
+            const { chat_id, reader_id, up_to_id } = msg.payload;
+            if (reader_id !== state.me?.id && chat_id === state.currentChatId)
+                updateReadStatusUpTo(up_to_id);
+        }
+        if (msg.type === "message:deleted_all") {
+            if (msg.payload.chat_id === state.currentChatId)
+                removeMessageById(msg.payload.message_id);
+            loadChats();
+        }
+        if (msg.type === "message:deleted_me") {
+            if (msg.payload.chat_id === state.currentChatId)
+                removeMessageById(msg.payload.message_id);
+            loadChats();
+        }
+        if (
+            msg.type === "friend:request" ||
+            msg.type === "friend:accepted" ||
+            msg.type === "chat:added"
+        )
+            refreshSide();
+        if (msg.type === "group:invite" || msg.type === "group:invite_answer")
+            loadGroupInvites();
+        if (msg.type === "group:deleted") {
+            if (state.currentChatId === msg.payload.chat_id) {
+                state.currentChatId = null;
+                state.currentChat = null;
+                const msgEl = qs("messages");
+                const memEl = qs("chatMembers");
+                if (msgEl) msgEl.innerHTML = "";
+                if (memEl) memEl.innerHTML = "";
+                setChatHeader(null);
+                setChatOpen(false);
+            }
+            refreshSide();
+        }
+        if (msg.type === "group:member_removed") {
+            if (
+                msg.payload.user_id === state.me?.id &&
+                state.currentChatId === msg.payload.chat_id
+            ) {
+                state.currentChatId = null;
+                state.currentChat = null;
+                const msgEl = qs("messages");
+                const memEl = qs("chatMembers");
+                if (msgEl) msgEl.innerHTML = "";
+                if (memEl) memEl.innerHTML = "";
+                setChatHeader(null);
+                setChatOpen(false);
+            }
+            if (state.currentChatId === msg.payload.chat_id)
+                loadMembers(msg.payload.chat_id);
+            refreshSide();
+        }
+        if (msg.type === "group:member_role") {
+            if (state.currentChatId === msg.payload.chat_id)
+                loadMembers(msg.payload.chat_id);
+            loadChats();
+        }
+        if (msg.type === "user:blocked") refreshSide();
+
+        // Звонки
+        handleCallWebSocketMessage(msg);
+    };
+
+    ws.onclose = () => {
+        stopWsHeartbeat();
+        scheduleWsReconnect();
+    };
+    ws.onerror = () => {
+        try {
+            ws.close();
+        } catch (_) {}
+    };
+}
+
+// ─── Сессия и настройки ──────────────────────────────────────────────────────
+
+async function ensureSession() {
+    if (!state.token) return false;
+    try {
+        state.me = await api("/api/me");
+        return true;
+    } catch (_) {
+        localStorage.removeItem("token");
+        state.token = "";
+        return false;
+    }
+}
+
+async function loadSettings() {
+    state.settings = await api("/api/settings");
+    const setFriendReq = qs("setFriendReq");
+    const setCalls = qs("setCalls");
+    const setInvites = qs("setInvites");
+    const setLastSeen = qs("setLastSeen");
+    if (setFriendReq) setFriendReq.value = state.settings.allow_friend_requests;
+    if (setCalls) setCalls.value = state.settings.allow_calls_from;
+    if (setInvites) setInvites.value = state.settings.allow_group_invites;
+    if (setLastSeen) setLastSeen.value = state.settings.show_last_seen;
+}
+
+async function onAuthorized() {
+    hide(qs("gateScreen"));
+    hide(qs("authScreen"));
+    show(qs("app"));
+    renderProfileMini();
+    await Promise.all([
+        loadChats(),
+        loadFriends(),
+        loadFriendRequests(),
+        loadGroupInvites(),
+        loadSettings(),
+    ]);
+    connectWs();
+    startFallbackSync();
+}
+
+function resetToAuthUi() {
+    hide(qs("app"));
+    show(qs("authScreen"));
+    hide(qs("gateScreen"));
+    setError("authError", "");
+    setError("gateError", "");
+    state.me = null;
+    state.settings = null;
+    state.chats = [];
+    state.friends = [];
+    state.currentChat = null;
+    state.currentChatId = null;
 }
 
 // ─── Привязка UI ─────────────────────────────────────────────────────────────
@@ -2292,459 +2387,547 @@ function bindUi() {
     setMainTab("chats");
     setChatOpen(false);
     setEmptyState(true);
-
     const gateCode = qs("gateCode");
-    if (gateCode) gateCode.value = localStorage.getItem("saved_gate_code") || "";
+    if (gateCode)
+        gateCode.value = localStorage.getItem("saved_gate_code") || "";
 
-    const tabChats        = qs("tabChats");
-    const tabRequests     = qs("tabRequests");
-    const tabSearch       = qs("tabSearch");
-    const tabFriends      = qs("tabFriends");
-    const btnBack         = qs("btnBackToList");
-    const btnMobile       = qs("btnMobileMenu");
-    const gateBtn         = qs("gateBtn");
-    const tabLogin        = qs("tabLogin");
-    const tabRegister     = qs("tabRegister");
-    const loginBtn        = qs("loginBtn");
-    const registerBtn     = qs("registerBtn");
-    const btnLogout       = qs("btnLogout");
-    const chatSearch      = qs("chatSearch");
-    const sendBtn         = qs("sendBtn");
-    const messageInput    = qs("messageInput");
-    const btnFile         = qs("btnFile");
-    const fileInput       = qs("fileInput");
-    const btnAssets       = qs("btnAssets");
-    const assetsDialog    = qs("assetsDialog");
-    const assetsClose     = qs("assetsClose");
-    const btnUploadAsset  = qs("btnUploadAsset");
-    const btnVoice        = qs("btnVoice");
-    const btnCircle       = qs("btnCircle");
-    const btnProfile      = qs("btnProfile");
-    const profileDialog   = qs("profileDialog");
-    const profileClose    = qs("profileClose");
-    const profileSave     = qs("profileSave");
-    const btnGroup        = qs("btnGroup");
-    const groupDialog     = qs("groupDialog");
-    const groupClose      = qs("groupClose");
-    const groupCreate     = qs("groupCreate");
-    const btnInviteGroup  = qs("btnInviteGroup");
-    const btnLeaveChat    = qs("btnLeaveChat");
-    const btnDeleteGroup  = qs("btnDeleteGroup");
-    const btnFriends      = qs("btnFriends");
-    const btnCopyMyId     = qs("btnCopyMyId");
-    const userSearch      = qs("userSearch");
-    const btnSettings     = qs("btnSettings");
-    const settingsDialog  = qs("settingsDialog");
-    const settingsClose   = qs("settingsClose");
-    const settingsSave    = qs("settingsSave");
+    const tabChats = qs("tabChats");
+    const tabRequests = qs("tabRequests");
+    const tabSearch = qs("tabSearch");
+    const tabFriends = qs("tabFriends");
+    const btnBack = qs("btnBackToList");
+    const btnMobile = qs("btnMobileMenu");
+    const gateBtn = qs("gateBtn");
+    const tabLogin = qs("tabLogin");
+    const tabRegister = qs("tabRegister");
+    const loginBtn = qs("loginBtn");
+    const registerBtn = qs("registerBtn");
+    const btnLogout = qs("btnLogout");
+    const chatSearch = qs("chatSearch");
+    const sendBtn = qs("sendBtn");
+    const messageInput = qs("messageInput");
+    const btnFile = qs("btnFile");
+    const fileInput = qs("fileInput");
+    const btnAssets = qs("btnAssets");
+    const assetsDialog = qs("assetsDialog");
+    const assetsClose = qs("assetsClose");
+    const btnUploadAsset = qs("btnUploadAsset");
+    const btnVoice = qs("btnVoice");
+    const btnCircle = qs("btnCircle");
+    const btnProfile = qs("btnProfile");
+    const profileDialog = qs("profileDialog");
+    const profileClose = qs("profileClose");
+    const profileSave = qs("profileSave");
+    const btnGroup = qs("btnGroup");
+    const groupDialog = qs("groupDialog");
+    const groupClose = qs("groupClose");
+    const groupCreate = qs("groupCreate");
+    const btnInviteGroup = qs("btnInviteGroup");
+    const btnLeaveChat = qs("btnLeaveChat");
+    const btnDeleteGroup = qs("btnDeleteGroup");
+    const btnFriends = qs("btnFriends");
+    const btnCopyMyId = qs("btnCopyMyId");
+    const userSearch = qs("userSearch");
+    const btnSettings = qs("btnSettings");
+    const settingsDialog = qs("settingsDialog");
+    const settingsClose = qs("settingsClose");
+    const settingsSave = qs("settingsSave");
     const btnChangePassword = qs("btnChangePassword");
-    const btnDeleteAccount  = qs("btnDeleteAccount");
-    const btnCallStart    = qs("btnCallStart");
-    const btnShowMembers  = qs("btnShowMembers");
-    const btnLeaveCall    = qs("btnLeaveCall");
-    const btnToggleMic    = qs("btnToggleMic");
-    const btnToggleCam    = qs("btnToggleCam");
-    const btnRotateCam    = qs("btnRotateCam");
-    const btnShareScreen  = qs("btnShareScreen");
-    const btnDevices      = qs("btnDevices");
-    const devicePanel     = qs("devicePanel");
-    const selMic          = qs("selMic");
-    const selCam          = qs("selCam");
-    const selSpeaker      = qs("selSpeaker");
-    const selAudioMode    = qs("selAudioMode");
+    const btnDeleteAccount = qs("btnDeleteAccount");
+    const btnCallStart = qs("btnCallStart");
+    const btnShowMembers = qs("btnShowMembers");
+    const btnLeaveCall = qs("btnLeaveCall");
+    const btnToggleMic = qs("btnToggleMic");
+    const btnToggleCam = qs("btnToggleCam");
+    const btnRotateCam = qs("btnRotateCam");
+    const btnShareScreen = qs("btnShareScreen");
+    const btnDevices = qs("btnDevices");
+    const devicePanel = qs("devicePanel");
+    const selMic = qs("selMic");
+    const selCam = qs("selCam");
+    const selSpeaker = qs("selSpeaker");
+    const selAudioMode = qs("selAudioMode");
     const btnMinimizeCall = qs("btnMinimizeCall");
-    const btnCallRestore  = qs("btnCallRestore");
-    const btnIncomingAccept  = qs("btnIncomingAccept");
+    const btnCallRestore = qs("btnCallRestore");
+    const btnIncomingAccept = qs("btnIncomingAccept");
     const btnIncomingDecline = qs("btnIncomingDecline");
-    const incomingCallToast  = qs("incomingCallToast");
+    const incomingCallToast = qs("incomingCallToast");
 
-    if (tabChats)    tabChats.onclick    = () => setMainTab("chats");
+    if (tabChats) tabChats.onclick = () => setMainTab("chats");
     if (tabRequests) tabRequests.onclick = () => setMainTab("requests");
-    if (tabSearch)   tabSearch.onclick   = () => setMainTab("search");
-    if (tabFriends)  tabFriends.onclick  = () => setMainTab("friends");
-    if (btnBack)   btnBack.onclick   = () => setChatOpen(false);
-    if (btnMobile) btnMobile.onclick = () => document.body.classList.toggle("menu-open");
+    if (tabSearch) tabSearch.onclick = () => setMainTab("search");
+    if (tabFriends) tabFriends.onclick = () => setMainTab("friends");
+    if (btnBack) btnBack.onclick = () => setChatOpen(false);
+    if (btnMobile)
+        btnMobile.onclick = () => document.body.classList.toggle("menu-open");
 
-    if (gateBtn) gateBtn.onclick = async () => {
-        setError("gateError", "");
-        try {
-            const code = qs("gateCode")?.value || "";
-            await api("/api/gate", { method: "POST", body: JSON.stringify({ code }) });
-            if (qs("rememberCode")?.checked) localStorage.setItem("saved_gate_code", code);
-            hide(qs("gateScreen"));
-            show(qs("authScreen"));
-        } catch (e) { setError("gateError", e.message); }
-    };
+    if (gateBtn)
+        gateBtn.onclick = async () => {
+            setError("gateError", "");
+            try {
+                const code = qs("gateCode")?.value || "";
+                await api("/api/gate", {
+                    method: "POST",
+                    body: JSON.stringify({ code }),
+                });
+                if (qs("rememberCode")?.checked)
+                    localStorage.setItem("saved_gate_code", code);
+                hide(qs("gateScreen"));
+                show(qs("authScreen"));
+            } catch (e) {
+                setError("gateError", e.message);
+            }
+        };
 
-    if (tabLogin) tabLogin.onclick = () => {
-        tabLogin.classList.add("active");
-        tabRegister?.classList.remove("active");
-        show(qs("loginPane"));
-        hide(qs("registerPane"));
-    };
-    if (tabRegister) tabRegister.onclick = () => {
-        tabRegister.classList.add("active");
-        tabLogin?.classList.remove("active");
-        hide(qs("loginPane"));
-        show(qs("registerPane"));
-    };
+    if (tabLogin)
+        tabLogin.onclick = () => {
+            tabLogin.classList.add("active");
+            tabRegister?.classList.remove("active");
+            show(qs("loginPane"));
+            hide(qs("registerPane"));
+        };
+    if (tabRegister)
+        tabRegister.onclick = () => {
+            tabRegister.classList.add("active");
+            tabLogin?.classList.remove("active");
+            hide(qs("loginPane"));
+            show(qs("registerPane"));
+        };
 
-    if (loginBtn) loginBtn.onclick = async () => {
-        setError("authError", "");
-        try {
-            const r = await api("/api/login", {
-                method: "POST",
-                body: JSON.stringify({
-                    username: qs("loginUsername")?.value || "",
-                    password: qs("loginPassword")?.value || "",
-                }),
-            });
-            state.token = r.token;
-            state.me = r.user;
-            localStorage.setItem("token", state.token);
-            await onAuthorized();
-        } catch (e) { setError("authError", e.message); }
-    };
+    if (loginBtn)
+        loginBtn.onclick = async () => {
+            setError("authError", "");
+            try {
+                const r = await api("/api/login", {
+                    method: "POST",
+                    body: JSON.stringify({
+                        username: qs("loginUsername")?.value || "",
+                        password: qs("loginPassword")?.value || "",
+                    }),
+                });
+                state.token = r.token;
+                state.me = r.user;
+                localStorage.setItem("token", state.token);
+                await onAuthorized();
+            } catch (e) {
+                setError("authError", e.message);
+            }
+        };
 
-    if (registerBtn) registerBtn.onclick = async () => {
-        setError("authError", "");
-        try {
-            const r = await api("/api/register", {
-                method: "POST",
-                body: JSON.stringify({
-                    username: qs("regUsername")?.value || "",
-                    password: qs("regPassword")?.value || "",
-                    nickname: qs("regNickname")?.value || "",
-                }),
-            });
-            state.token = r.token;
-            state.me = r.user;
-            localStorage.setItem("token", state.token);
-            await onAuthorized();
-        } catch (e) { setError("authError", e.message); }
-    };
+    if (registerBtn)
+        registerBtn.onclick = async () => {
+            setError("authError", "");
+            try {
+                const r = await api("/api/register", {
+                    method: "POST",
+                    body: JSON.stringify({
+                        username: qs("regUsername")?.value || "",
+                        password: qs("regPassword")?.value || "",
+                        nickname: qs("regNickname")?.value || "",
+                    }),
+                });
+                state.token = r.token;
+                state.me = r.user;
+                localStorage.setItem("token", state.token);
+                await onAuthorized();
+            } catch (e) {
+                setError("authError", e.message);
+            }
+        };
 
-    if (btnLogout) btnLogout.onclick = async () => {
-        try { await api("/api/logout", { method: "POST", body: "{}" }); } catch (_) {}
-        leaveCall();
-        if (state.syncTimer) clearInterval(state.syncTimer);
-        stopWsHeartbeat();
-        try { state.ws?.close(); } catch (_) {}
-        localStorage.removeItem("token");
-        state.token = "";
-        resetToAuthUi();
-    };
+    if (btnLogout)
+        btnLogout.onclick = async () => {
+            try {
+                await api("/api/logout", { method: "POST", body: "{}" });
+            } catch (_) {}
+            leaveCall();
+            if (state.syncTimer) clearInterval(state.syncTimer);
+            stopWsHeartbeat();
+            try {
+                state.ws?.close();
+            } catch (_) {}
+            localStorage.removeItem("token");
+            state.token = "";
+            resetToAuthUi();
+        };
 
     if (chatSearch) chatSearch.oninput = () => renderChatList(chatSearch.value);
-
-    if (sendBtn) sendBtn.onclick = () => sendMessage({ text: messageInput?.value || "" });
+    if (sendBtn)
+        sendBtn.onclick = () =>
+            sendMessage({ text: messageInput?.value || "" });
     if (messageInput) {
         bindClipboardPaste(messageInput);
-        messageInput.addEventListener("keydown", e => {
+        messageInput.addEventListener("keydown", (e) => {
             if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
                 sendMessage({ text: messageInput.value || "" });
             }
         });
     }
-
     const messagesEl = qs("messages");
     if (messagesEl) bindMessageContextMenu(messagesEl);
 
-    if (btnFile)  btnFile.onclick  = () => fileInput?.click();
+    if (btnFile) btnFile.onclick = () => fileInput?.click();
     if (btnVoice) btnVoice.onclick = () => startVoiceRecord();
     if (btnCircle) btnCircle.onclick = () => startCircleRecord();
 
-    if (btnAssets) btnAssets.onclick = async () => {
-        await loadAssets();
-        assetsDialog?.showModal();
-    };
+    if (btnAssets)
+        btnAssets.onclick = async () => {
+            await loadAssets();
+            assetsDialog?.showModal();
+        };
     if (assetsClose) assetsClose.onclick = () => assetsDialog?.close();
-    if (btnUploadAsset) btnUploadAsset.onclick = async () => {
-        const f = qs("assetFile")?.files[0];
-        if (!f) { alert("Выберите файл"); return; }
-        const form = new FormData();
-        form.append("kind", qs("assetKind")?.value || "emoji");
-        form.append("title", qs("assetTitle")?.value || "");
-        form.append("file", f);
-        await api("/api/assets", { method: "POST", body: form, headers: {} });
-        const assetFile = qs("assetFile");
-        const assetTitle = qs("assetTitle");
-        if (assetFile)  assetFile.value  = "";
-        if (assetTitle) assetTitle.value = "";
-        await loadAssets();
-    };
-
-    if (fileInput) fileInput.onchange = async () => {
-        const f = fileInput.files[0];
-        if (!f) return;
-        let kind = "file";
-        if (f.type.startsWith("image/")) kind = "image";
-        if (f.type.startsWith("video/")) kind = "video";
-        await sendMessage({ file: f, kind });
-        fileInput.value = "";
-    };
-
-    if (btnProfile) btnProfile.onclick = () => {
-        const profileNickname = qs("profileNickname");
-        const profileAbout    = qs("profileAbout");
-        if (profileNickname) profileNickname.value = state.me?.nickname || "";
-        if (profileAbout)    profileAbout.value    = state.me?.about    || "";
-        profileDialog?.showModal();
-    };
-    if (profileClose) profileClose.onclick = () => profileDialog?.close();
-    if (profileSave) profileSave.onclick = async () => {
-        state.me = await api("/api/profile", {
-            method: "POST",
-            body: JSON.stringify({
-                nickname: qs("profileNickname")?.value || "",
-                about:    qs("profileAbout")?.value    || "",
-            }),
-        });
-        const avatar = qs("profileAvatar")?.files[0];
-        if (avatar) {
+    if (btnUploadAsset)
+        btnUploadAsset.onclick = async () => {
+            const f = qs("assetFile")?.files[0];
+            if (!f) {
+                alert("Выберите файл");
+                return;
+            }
             const form = new FormData();
-            form.append("file", avatar);
-            state.me = await api("/api/profile/avatar", { method: "POST", body: form, headers: {} });
-        }
-        renderProfileMini();
-        profileDialog?.close();
-    };
+            form.append("kind", qs("assetKind")?.value || "emoji");
+            form.append("title", qs("assetTitle")?.value || "");
+            form.append("file", f);
+            await api("/api/assets", {
+                method: "POST",
+                body: form,
+                headers: {},
+            });
+            if (qs("assetFile")) qs("assetFile").value = "";
+            if (qs("assetTitle")) qs("assetTitle").value = "";
+            await loadAssets();
+        };
 
-    if (btnGroup)  btnGroup.onclick  = () => groupDialog?.showModal();
+    if (fileInput)
+        fileInput.onchange = async () => {
+            const f = fileInput.files[0];
+            if (!f) return;
+            let kind = "file";
+            if (f.type.startsWith("image/")) kind = "image";
+            if (f.type.startsWith("video/")) kind = "video";
+            await sendMessage({ file: f, kind });
+            fileInput.value = "";
+        };
+
+    if (btnProfile)
+        btnProfile.onclick = () => {
+            if (qs("profileNickname"))
+                qs("profileNickname").value = state.me?.nickname || "";
+            if (qs("profileAbout"))
+                qs("profileAbout").value = state.me?.about || "";
+            profileDialog?.showModal();
+        };
+    if (profileClose) profileClose.onclick = () => profileDialog?.close();
+    if (profileSave)
+        profileSave.onclick = async () => {
+            state.me = await api("/api/profile", {
+                method: "POST",
+                body: JSON.stringify({
+                    nickname: qs("profileNickname")?.value || "",
+                    about: qs("profileAbout")?.value || "",
+                }),
+            });
+            const avatar = qs("profileAvatar")?.files[0];
+            if (avatar) {
+                const form = new FormData();
+                form.append("file", avatar);
+                state.me = await api("/api/profile/avatar", {
+                    method: "POST",
+                    body: form,
+                    headers: {},
+                });
+            }
+            renderProfileMini();
+            profileDialog?.close();
+        };
+
+    if (btnGroup) btnGroup.onclick = () => groupDialog?.showModal();
     if (groupClose) groupClose.onclick = () => groupDialog?.close();
-    if (groupCreate) groupCreate.onclick = async () => {
-        try {
-            const members = (qs("groupMembers")?.value || "")
-                .split(",")
-                .map(v => v.trim().replace(/^@/, "").toLowerCase())
-                .filter(Boolean);
-            const out = await api("/api/groups", {
+    if (groupCreate)
+        groupCreate.onclick = async () => {
+            try {
+                const members = (qs("groupMembers")?.value || "")
+                    .split(",")
+                    .map((v) => v.trim().replace(/^@/, "").toLowerCase())
+                    .filter(Boolean);
+                const out = await api("/api/groups", {
+                    method: "POST",
+                    body: JSON.stringify({
+                        title: qs("groupTitle")?.value || "",
+                        members,
+                    }),
+                });
+                if (qs("groupTitle")) qs("groupTitle").value = "";
+                if (qs("groupMembers")) qs("groupMembers").value = "";
+                groupDialog?.close();
+                await loadChats();
+                await openChat(out.chat_id);
+            } catch (e) {
+                alert(e.message);
+            }
+        };
+
+    if (btnInviteGroup)
+        btnInviteGroup.onclick = async () => {
+            if (!state.currentChat || state.currentChat.type !== "group")
+                return;
+            const raw = prompt("Введите @username для инвайта");
+            const username = String(raw || "").trim();
+            if (!username) return;
+            try {
+                await api(
+                    `/api/groups/${state.currentChatId}/invite/username`,
+                    { method: "POST", body: JSON.stringify({ username }) },
+                );
+                alert("Инвайт отправлен");
+            } catch (e) {
+                alert(e.message);
+            }
+        };
+
+    if (btnLeaveChat)
+        btnLeaveChat.onclick = async () => {
+            if (!state.currentChatId) return;
+            const targetName =
+                state.currentChat?.type === "group" ? "эту группу" : "этот чат";
+            if (!confirm(`Выйти из ${targetName}?`)) return;
+            if (state.call.active && state.call.chatId === state.currentChatId)
+                leaveCall();
+            await api(`/api/chats/${state.currentChatId}/leave`, {
                 method: "POST",
-                body: JSON.stringify({ title: qs("groupTitle")?.value || "", members }),
+                body: "{}",
             });
-            if (qs("groupTitle"))   qs("groupTitle").value   = "";
-            if (qs("groupMembers")) qs("groupMembers").value = "";
-            groupDialog?.close();
+            state.currentChat = null;
+            state.currentChatId = null;
+            const msgEl = qs("messages");
+            const memEl = qs("chatMembers");
+            if (msgEl) msgEl.innerHTML = "";
+            if (memEl) memEl.innerHTML = "";
+            setChatHeader(null);
+            setChatOpen(false);
             await loadChats();
-            await openChat(out.chat_id);
-        } catch (e) { alert(e.message); }
-    };
+        };
 
-    if (btnInviteGroup) btnInviteGroup.onclick = async () => {
-        if (!state.currentChat || state.currentChat.type !== "group") return;
-        const raw = prompt("Введите @username для инвайта");
-        const username = String(raw || "").trim();
-        if (!username) return;
-        try {
-            await api(`/api/groups/${state.currentChatId}/invite/username`, {
-                method: "POST",
-                body: JSON.stringify({ username }),
+    if (btnDeleteGroup)
+        btnDeleteGroup.onclick = async () => {
+            if (!state.currentChat || state.currentChat.type !== "group")
+                return;
+            if (!confirm("Удалить группу?")) return;
+            await api(`/api/groups/${state.currentChatId}`, {
+                method: "DELETE",
             });
-            alert("Инвайт отправлен");
-        } catch (e) { alert(e.message); }
-    };
+            state.currentChat = null;
+            state.currentChatId = null;
+            const msgEl = qs("messages");
+            const memEl = qs("chatMembers");
+            if (msgEl) msgEl.innerHTML = "";
+            if (memEl) memEl.innerHTML = "";
+            setChatHeader(null);
+            setChatOpen(false);
+            await loadChats();
+        };
 
-    if (btnLeaveChat) btnLeaveChat.onclick = async () => {
-        if (!state.currentChatId) return;
-        const targetName = state.currentChat?.type === "group" ? "эту группу" : "этот чат";
-        if (!confirm(`Выйти из ${targetName}?`)) return;
-        if (state.call.active && state.call.chatId === state.currentChatId) leaveCall();
-        await api(`/api/chats/${state.currentChatId}/leave`, { method: "POST", body: "{}" });
-        state.currentChat = null;
-        state.currentChatId = null;
-        const msgEl = qs("messages");
-        const memEl = qs("chatMembers");
-        if (msgEl) msgEl.innerHTML = "";
-        if (memEl) memEl.innerHTML = "";
-        setChatHeader(null);
-        setChatOpen(false);
-        await loadChats();
-    };
+    if (btnFriends) btnFriends.onclick = refreshSide;
+    if (btnCopyMyId)
+        btnCopyMyId.onclick = async () => {
+            try {
+                await navigator.clipboard.writeText(String(state.me?.id || ""));
+                alert(`ID скопирован: ${state.me?.id}`);
+            } catch (_) {
+                prompt("Скопируйте ваш ID", String(state.me?.id || ""));
+            }
+        };
 
-    if (btnDeleteGroup) btnDeleteGroup.onclick = async () => {
-        if (!state.currentChat || state.currentChat.type !== "group") return;
-        if (!confirm("Удалить группу?")) return;
-        await api(`/api/groups/${state.currentChatId}`, { method: "DELETE" });
-        state.currentChat = null;
-        state.currentChatId = null;
-        const msgEl = qs("messages");
-        const memEl = qs("chatMembers");
-        if (msgEl) msgEl.innerHTML = "";
-        if (memEl) memEl.innerHTML = "";
-        setChatHeader(null);
-        setChatOpen(false);
-        await loadChats();
-    };
-
-    if (btnFriends)  btnFriends.onclick  = refreshSide;
-    if (btnCopyMyId) btnCopyMyId.onclick = async () => {
-        try {
-            await navigator.clipboard.writeText(String(state.me?.id || ""));
-            alert(`ID скопирован: ${state.me?.id}`);
-        } catch (_) {
-            prompt("Скопируйте ваш ID", String(state.me?.id || ""));
-        }
-    };
-
-    if (userSearch) userSearch.oninput = async () => {
-        const q   = userSearch.value.trim();
-        const out = qs("userResults");
-        if (!out) return;
-        if (q.length < 2) { out.innerHTML = ""; return; }
-        const users = await api(`/api/users/search?q=${encodeURIComponent(q)}`);
-        out.innerHTML = "";
-        users.forEach(u => {
-            const el = document.createElement("div");
-            el.className = "item";
-            el.innerHTML = `
+    if (userSearch)
+        userSearch.oninput = async () => {
+            const q = userSearch.value.trim();
+            const out = qs("userResults");
+            if (!out) return;
+            if (q.length < 2) {
+                out.innerHTML = "";
+                return;
+            }
+            const users = await api(
+                `/api/users/search?q=${encodeURIComponent(q)}`,
+            );
+            out.innerHTML = "";
+            users.forEach((u) => {
+                const el = document.createElement("div");
+                el.className = "item";
+                el.innerHTML = `
                 <div class="item-head">
                     ${avatarMarkup({ avatar: u.avatar, label: u.nickname, seed: `search-${u.id}`, className: "avatar-md" })}
                     <div class="item-copy">
-                        <div class="item-title-row">
-                            <b>${escapeHtml(u.nickname)}</b>
-                            <span class="item-tag">User</span>
-                        </div>
+                        <div class="item-title-row"><b>${escapeHtml(u.nickname)}</b><span class="item-tag">User</span></div>
                         <small>@${escapeHtml(u.username)} #${u.id}</small>
                         ${u.about ? `<p class="item-preview">${escapeHtml(truncateText(u.about, 90))}</p>` : ""}
                     </div>
                 </div>
             `;
-            const actions = document.createElement("div");
-            actions.className = "actions";
-            const add = document.createElement("button");
-            add.textContent = "В друзья";
-            add.onclick = () => api("/api/friends/request", { method: "POST", body: JSON.stringify({ username: u.username }) });
-            const block = document.createElement("button");
-            block.className = "danger";
-            block.textContent = "Блок";
-            block.onclick = async () => {
-                await api(`/api/users/${u.id}/block`, { method: "POST", body: "{}" });
-                await refreshSide();
-            };
-            actions.appendChild(add);
-            actions.appendChild(block);
-            el.appendChild(actions);
-            out.appendChild(el);
-        });
-    };
+                const actions = document.createElement("div");
+                actions.className = "actions";
+                const add = document.createElement("button");
+                add.textContent = "В друзья";
+                add.onclick = () =>
+                    api("/api/friends/request", {
+                        method: "POST",
+                        body: JSON.stringify({ username: u.username }),
+                    });
+                const block = document.createElement("button");
+                block.className = "danger";
+                block.textContent = "Блок";
+                block.onclick = async () => {
+                    await api(`/api/users/${u.id}/block`, {
+                        method: "POST",
+                        body: "{}",
+                    });
+                    await refreshSide();
+                };
+                actions.appendChild(add);
+                actions.appendChild(block);
+                el.appendChild(actions);
+                out.appendChild(el);
+            });
+        };
 
-    if (btnSettings) btnSettings.onclick = async () => {
-        await loadSettings();
-        await loadBlockedList();
-        settingsDialog?.showModal();
-    };
+    if (btnSettings)
+        btnSettings.onclick = async () => {
+            await loadSettings();
+            await loadBlockedList();
+            settingsDialog?.showModal();
+        };
     if (settingsClose) settingsClose.onclick = () => settingsDialog?.close();
-    if (settingsSave) settingsSave.onclick = async () => {
-        state.settings = await api("/api/settings", {
-            method: "POST",
-            body: JSON.stringify({
-                allow_friend_requests: qs("setFriendReq")?.value || "everyone",
-                allow_calls_from:      qs("setCalls")?.value    || "friends",
-                allow_group_invites:   qs("setInvites")?.value  || "friends",
-                show_last_seen:        qs("setLastSeen")?.value  || "friends",
-            }),
-        });
-        settingsDialog?.close();
-    };
+    if (settingsSave)
+        settingsSave.onclick = async () => {
+            state.settings = await api("/api/settings", {
+                method: "POST",
+                body: JSON.stringify({
+                    allow_friend_requests:
+                        qs("setFriendReq")?.value || "everyone",
+                    allow_calls_from: qs("setCalls")?.value || "friends",
+                    allow_group_invites: qs("setInvites")?.value || "friends",
+                    show_last_seen: qs("setLastSeen")?.value || "friends",
+                }),
+            });
+            settingsDialog?.close();
+        };
 
-    if (btnChangePassword) btnChangePassword.onclick = async () => {
-        const oldPassword = qs("oldPassword")?.value || "";
-        const newPassword = qs("newPassword")?.value || "";
-        if (!oldPassword || !newPassword) { alert("Введите старый и новый пароль"); return; }
-        await api("/api/account/password", {
-            method: "POST",
-            body: JSON.stringify({ old_password: oldPassword, new_password: newPassword }),
-        });
-        if (qs("oldPassword")) qs("oldPassword").value = "";
-        if (qs("newPassword")) qs("newPassword").value = "";
-        alert("Пароль успешно изменён");
-    };
+    if (btnChangePassword)
+        btnChangePassword.onclick = async () => {
+            const oldPassword = qs("oldPassword")?.value || "";
+            const newPassword = qs("newPassword")?.value || "";
+            if (!oldPassword || !newPassword) {
+                alert("Введите старый и новый пароль");
+                return;
+            }
+            await api("/api/account/password", {
+                method: "POST",
+                body: JSON.stringify({
+                    old_password: oldPassword,
+                    new_password: newPassword,
+                }),
+            });
+            if (qs("oldPassword")) qs("oldPassword").value = "";
+            if (qs("newPassword")) qs("newPassword").value = "";
+            alert("Пароль успешно изменён");
+        };
 
-    if (btnDeleteAccount) btnDeleteAccount.onclick = async () => {
-        if (!confirm("Удалить аккаунт безвозвратно? Это удалит ваши сессии и уберёт вас из чатов.")) return;
-        try { await api("/api/account", { method: "DELETE" }); }
-        catch (e) { alert(e.message); return; }
-        leaveCall();
-        if (state.syncTimer) clearInterval(state.syncTimer);
-        stopWsHeartbeat();
-        try { state.ws?.close(); } catch (_) {}
-        localStorage.removeItem("token");
-        state.token = "";
-        resetToAuthUi();
-    };
-
-    // ─── Звонок ───────────────────────────────────────────────────────────────
+    if (btnDeleteAccount)
+        btnDeleteAccount.onclick = async () => {
+            if (
+                !confirm(
+                    "Удалить аккаунт безвозвратно? Это удалит ваши сессии и уберёт вас из чатов.",
+                )
+            )
+                return;
+            try {
+                await api("/api/account", { method: "DELETE" });
+            } catch (e) {
+                alert(e.message);
+                return;
+            }
+            leaveCall();
+            if (state.syncTimer) clearInterval(state.syncTimer);
+            stopWsHeartbeat();
+            try {
+                state.ws?.close();
+            } catch (_) {}
+            localStorage.removeItem("token");
+            state.token = "";
+            resetToAuthUi();
+        };
 
     if (btnCallStart) btnCallStart.onclick = startCall;
-
     if (btnShowMembers) btnShowMembers.onclick = () => openMembersSheet();
     const btnCloseMembers = qs("btnCloseMembers");
     if (btnCloseMembers) btnCloseMembers.onclick = () => closeMembersSheet();
     const membersBackdrop = qs("membersBackdrop");
     if (membersBackdrop) membersBackdrop.onclick = () => closeMembersSheet();
 
-    if (btnLeaveCall)   btnLeaveCall.onclick   = leaveCall;
-    if (btnToggleMic)   btnToggleMic.onclick   = toggleMic;
-    if (btnToggleCam)   btnToggleCam.onclick   = toggleCam;
-    if (btnRotateCam)   btnRotateCam.onclick   = rotateCamera;
+    if (btnLeaveCall) btnLeaveCall.onclick = leaveCall;
+    if (btnToggleMic) btnToggleMic.onclick = toggleMic;
+    if (btnToggleCam) btnToggleCam.onclick = toggleCam;
+    if (btnRotateCam) btnRotateCam.onclick = rotateCamera;
     if (btnShareScreen) btnShareScreen.onclick = toggleScreenShare;
 
-    if (btnDevices) btnDevices.onclick = async () => {
-        if (!devicePanel) return;
-        if (devicePanel.classList.contains("hidden")) {
-            await refreshDevicePanel();
-            show(devicePanel);
-        } else {
-            hide(devicePanel);
-        }
-    };
+    if (btnDevices)
+        btnDevices.onclick = async () => {
+            if (!devicePanel) return;
+            if (devicePanel.classList.contains("hidden")) {
+                await refreshDevicePanel();
+                show(devicePanel);
+            } else hide(devicePanel);
+        };
 
-    if (selMic)      selMic.onchange      = async () => switchMicDevice(selMic.value);
-    if (selCam)      selCam.onchange      = async () => switchCamDevice(selCam.value);
-    if (selSpeaker)  selSpeaker.onchange  = async () => {
-        state.devicePrefs.speakerId = selSpeaker.value || "";
-        await applySpeakerToAllTiles();
-    };
-    if (selAudioMode) selAudioMode.onchange = async () => applyAudioMode(selAudioMode.value);
+    if (selMic) selMic.onchange = async () => switchMicDevice(selMic.value);
+    if (selCam) selCam.onchange = async () => switchCamDevice(selCam.value);
+    if (selSpeaker)
+        selSpeaker.onchange = async () => {
+            state.devicePrefs.speakerId = selSpeaker.value || "";
+            await applySpeakerToAllTiles();
+        };
+    if (selAudioMode)
+        selAudioMode.onchange = async () => applyAudioMode(selAudioMode.value);
 
-    if (btnMinimizeCall) btnMinimizeCall.onclick = () => {
-        hide(qs("callOverlay"));
-        state.ui.callMinimized = true;
-        show(qs("btnCallRestore"));
-    };
-    if (btnCallRestore) btnCallRestore.onclick = () => {
-        if (!state.call.active) return;
-        show(qs("callOverlay"));
-        hide(qs("btnCallRestore"));
-        state.ui.callMinimized = false;
-    };
+    if (btnMinimizeCall)
+        btnMinimizeCall.onclick = () => {
+            hide(qs("callOverlay"));
+            state.ui.callMinimized = true;
+            show(qs("btnCallRestore"));
+        };
+    if (btnCallRestore)
+        btnCallRestore.onclick = () => {
+            if (!state.call.active) return;
+            show(qs("callOverlay"));
+            hide(qs("btnCallRestore"));
+            state.ui.callMinimized = false;
+        };
 
-    if (btnIncomingAccept) btnIncomingAccept.onclick = async () => {
-        await unlockAudioContext();
-        const incoming = state.ui.incomingCall;
-        hide(incomingCallToast);
-        if (!incoming) return;
-        const chat = state.chats.find(c => c.id === incoming.chatId);
-        if (chat) {
-            await openChat(chat.id);
-            await startCall();
-        }
-        state.ui.incomingCall = null;
-    };
-
-    if (btnIncomingDecline) btnIncomingDecline.onclick = () => {
-        hide(incomingCallToast);
-        state.ui.incomingCall = null;
-    };
+    if (btnIncomingAccept)
+        btnIncomingAccept.onclick = async () => {
+            await unlockAudioContext();
+            const incoming = state.ui.incomingCall;
+            hide(incomingCallToast);
+            if (!incoming) return;
+            const chat = state.chats.find((c) => c.id === incoming.chatId);
+            if (chat) {
+                await openChat(chat.id);
+                await startCall();
+            }
+            state.ui.incomingCall = null;
+        };
+    if (btnIncomingDecline)
+        btnIncomingDecline.onclick = () => {
+            hide(incomingCallToast);
+            state.ui.incomingCall = null;
+        };
 }
 
-// ─── Boot ────────────────────────────────────────────────────────────────────
+// ─── Boot ─────────────────────────────────────────────────────────────────────
 
 async function boot() {
     if (window.__lanMessengerBooted) return;
     window.__lanMessengerBooted = true;
-
     installResponsiveEnvironment();
     bindUi();
     const sessionOk = await ensureSession();
