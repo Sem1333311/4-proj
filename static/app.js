@@ -1,7 +1,4 @@
 const state = {
-    
-    
-
     token: localStorage.getItem("token") || "",
     me: null,
     settings: null,
@@ -43,12 +40,17 @@ const state = {
         camFacing: "user",
     },
     assets: [],
-        ui: {
+    messagesById: new Map(),
+    ui: {
         currentTab: "chats",
         chatOpen: false,
         callMinimized: false,
         incomingCall: null,
         membersOpen: false,
+        replyTo: null,
+        userView: null,
+        emojiCategory: "faces",
+        recentEmojis: [],
     },
 };
 
@@ -60,12 +62,11 @@ const isMobile = isLikelyIOS || isLikelyAndroid;
 const isLikelySafari = /^((?!chrome|android|crios|fxios).)*safari/i.test(
     navigator.userAgent,
 );
-const isLocalDevHost = ["localhost", "127.0.0.1", "[::1]"].includes(
-    location.hostname,
-    function isDesktopMembersLayout() {
+const isLocalDevHost = ["localhost", "127.0.0.1", "[::1]"].includes(location.hostname);
+
+function isDesktopMembersLayout() {
     return window.innerWidth > 980;
 }
-);
 
 const THEME_STORAGE_KEY = "lm_theme";
 const THEME_VALUES = new Set(["default", "light", "burgundy", "black"]);
@@ -75,6 +76,105 @@ const THEME_META = {
     burgundy: "#3a0f18",
     black: "#000000",
 };
+
+const RECENT_EMOJI_KEY = "lm_recent_emojis";
+const RECENT_EMOJI_LIMIT = 30;
+const EMOJI_CATEGORIES = [
+    {
+        id: "faces",
+        icon: "🙂",
+        title: "Смайлы",
+        emojis: [
+            "😀","😃","😄","😁","😆","😅","😂","🤣","🙂","😉","😊","😇","🥰","😍","😘","😋",
+            "😎","🤩","🥳","😏","😐","😑","😶","🙄","😬","🤔","🫡","🤗","🤭","🫠","😴","🤤",
+        ],
+    },
+    {
+        id: "gestures",
+        icon: "👍",
+        title: "Жесты",
+        emojis: [
+            "👍","👎","👌","✌️","🤞","🫶","👏","🙌","👐","🤝","🙏","✍️","💪","🫵","👀","🤌",
+            "🤟","🤙","👋","🤚","✋","🖐️","🫱","🫲",
+        ],
+    },
+    {
+        id: "love",
+        icon: "❤️",
+        title: "Любовь",
+        emojis: [
+            "❤️","🩷","🧡","💛","💚","🩵","💙","💜","🤎","🖤","🤍","💔","❣️","💕","💞","💓",
+            "💗","💖","💘","💝","💟","💯","🔥","✨",
+        ],
+    },
+    {
+        id: "objects",
+        icon: "🎉",
+        title: "Праздник",
+        emojis: [
+            "🎉","🎊","🎁","🎈","🥂","🍾","🍻","🍕","🍔","🍟","🌮","🍣","🍩","🍰","☕","🍵",
+            "⚽","🏀","🎮","🎵","🎶","📸","📱","💻",
+        ],
+    },
+    {
+        id: "travel",
+        icon: "🌍",
+        title: "Мир",
+        emojis: [
+            "🌍","🌎","🌏","🌞","🌙","⭐","☁️","🌧️","⛈️","❄️","☀️","🌈","🏠","🏢","🚗","🚕",
+            "🚌","🚇","✈️","🚀","🗺️","🧭","🏖️","🏔️",
+        ],
+    },
+];
+
+const CLASSIC_EMOJI_CATEGORIES = [
+    {
+        id: "faces",
+        icon: "\u{1F642}",
+        title: "Faces",
+        emojis: [
+            "\u{1F600}", "\u{1F603}", "\u{1F604}", "\u{1F601}", "\u{1F606}", "\u{1F605}", "\u{1F602}", "\u{1F923}",
+            "\u{1F642}", "\u{1F609}", "\u{1F60A}", "\u{1F60D}", "\u{1F618}", "\u{1F61A}", "\u{1F60B}", "\u{1F61C}",
+            "\u{1F60E}", "\u{1F634}", "\u{1F62D}", "\u{1F629}", "\u{1F621}", "\u{1F914}", "\u{1F928}", "\u{1F972}",
+        ],
+    },
+    {
+        id: "gestures",
+        icon: "\u{1F44D}",
+        title: "Gestures",
+        emojis: [
+            "\u{1F44D}", "\u{1F44E}", "\u{1F44C}", "\u{270C}\u{FE0F}", "\u{1F91E}", "\u{1F44F}", "\u{1F64C}", "\u{1F64F}",
+            "\u{1F450}", "\u{1F44B}", "\u{1F4AA}", "\u{1F91D}", "\u{1F446}", "\u{1F447}", "\u{1F449}", "\u{1F448}",
+        ],
+    },
+    {
+        id: "love",
+        icon: "\u{2764}\u{FE0F}",
+        title: "Love",
+        emojis: [
+            "\u{2764}\u{FE0F}", "\u{1F49B}", "\u{1F49A}", "\u{1F499}", "\u{1F49C}", "\u{1F5A4}", "\u{1F90D}", "\u{1F494}",
+            "\u{1F495}", "\u{1F49E}", "\u{1F493}", "\u{1F497}", "\u{1F496}", "\u{1F498}", "\u{1F49D}", "\u{1F525}",
+        ],
+    },
+    {
+        id: "food",
+        icon: "\u{1F354}",
+        title: "Food",
+        emojis: [
+            "\u{1F354}", "\u{1F355}", "\u{1F35F}", "\u{1F32E}", "\u{1F37F}", "\u{1F369}", "\u{1F370}", "\u{1F366}",
+            "\u{1F367}", "\u{1F36A}", "\u{1F36B}", "\u{2615}", "\u{1F375}", "\u{1F964}", "\u{1F37A}", "\u{1F377}",
+        ],
+    },
+    {
+        id: "travel",
+        icon: "\u{1F30D}",
+        title: "Travel",
+        emojis: [
+            "\u{1F30D}", "\u{1F31E}", "\u{1F319}", "\u{2B50}", "\u{2600}\u{FE0F}", "\u{1F308}", "\u{1F3E0}", "\u{1F3E2}",
+            "\u{1F697}", "\u{1F695}", "\u{1F68C}", "\u{1F687}", "\u{2708}\u{FE0F}", "\u{1F680}", "\u{1F5FA}\u{FE0F}", "\u{1F3D6}\u{FE0F}",
+        ],
+    },
+];
 
 function normalizeTheme(theme) {
     return THEME_VALUES.has(theme) ? theme : "default";
@@ -411,6 +511,254 @@ function setEmptyState(showEmpty) {
     setComposerEnabled(!showEmpty);
 }
 
+function mediaFallbackName(kind) {
+    if (kind === "image" || kind === "emoji" || kind === "sticker")
+        return "image";
+    if (kind === "video" || kind === "circle") return "video";
+    if (kind === "voice") return "voice";
+    return "file";
+}
+
+function messageKindLabel(kind) {
+    if (kind === "image") return "Фото";
+    if (kind === "video") return "Видео";
+    if (kind === "voice") return "Голосовое";
+    if (kind === "circle") return "Кружок";
+    if (kind === "emoji") return "Эмодзи";
+    if (kind === "sticker") return "Стикер";
+    if (kind === "file") return "Файл";
+    return "Сообщение";
+}
+
+function messagePreviewText(payload) {
+    if (!payload) return "Сообщение";
+    const txt = String(payload.text || "").trim();
+    if (txt) return truncateText(txt, 120);
+    const fileName = String(payload.file_name || "").trim();
+    if (fileName) return truncateText(fileName, 120);
+    return messageKindLabel(payload.kind);
+}
+
+function insertTextAtCursor(input, text) {
+    if (!input) return;
+    const start = input.selectionStart ?? input.value.length;
+    const end = input.selectionEnd ?? input.value.length;
+    const before = input.value.slice(0, start);
+    const after = input.value.slice(end);
+    input.value = `${before}${text}${after}`;
+    const pos = start + text.length;
+    input.focus();
+    input.setSelectionRange(pos, pos);
+}
+
+function clearReplyTarget() {
+    state.ui.replyTo = null;
+    renderReplyComposer();
+}
+
+function setReplyTarget(payload) {
+    if (!payload?.id) return;
+    state.ui.replyTo = {
+        id: Number(payload.id),
+        nickname: payload.nickname || payload.username || "пользователь",
+        kind: payload.kind || "text",
+        text: payload.text || "",
+        file_name: payload.file_name || "",
+    };
+    renderReplyComposer();
+    qs("messageInput")?.focus();
+}
+
+function renderReplyComposer() {
+    const box = qs("replyComposer");
+    const title = qs("replyComposerTitle");
+    const text = qs("replyComposerText");
+    if (!box || !title || !text) return;
+    const data = state.ui.replyTo;
+    if (!data) {
+        hide(box);
+        title.textContent = "Ответ";
+        text.textContent = "";
+        return;
+    }
+    title.textContent = `Ответ: ${data.nickname}`;
+    text.textContent = messagePreviewText(data);
+    show(box);
+}
+
+function highlightMessageElement(el) {
+    if (!el) return;
+    el.classList.add("message-highlight");
+    setTimeout(() => el.classList.remove("message-highlight"), 1300);
+}
+
+function scrollToMessage(messageId) {
+    const target = qs("messages")?.querySelector(`[data-mid="${messageId}"]`);
+    if (!target) {
+        alert("Исходное сообщение недоступно в текущей истории");
+        return;
+    }
+    target.scrollIntoView({ behavior: "smooth", block: "center" });
+    highlightMessageElement(target);
+}
+
+function readRecentEmojis() {
+    try {
+        const raw = localStorage.getItem(RECENT_EMOJI_KEY);
+        const parsed = raw ? JSON.parse(raw) : [];
+        return Array.isArray(parsed)
+            ? parsed.filter((e) => typeof e === "string" && e.length > 0)
+            : [];
+    } catch {
+        return [];
+    }
+}
+
+function writeRecentEmojis(items) {
+    const normalized = Array.from(new Set(items)).slice(0, RECENT_EMOJI_LIMIT);
+    state.ui.recentEmojis = normalized;
+    localStorage.setItem(RECENT_EMOJI_KEY, JSON.stringify(normalized));
+}
+
+function pushRecentEmoji(emoji) {
+    const current = state.ui.recentEmojis?.length
+        ? state.ui.recentEmojis
+        : readRecentEmojis();
+    writeRecentEmojis([emoji, ...current.filter((e) => e !== emoji)]);
+}
+
+function insertEmojiIntoComposer(emoji) {
+    const input = qs("messageInput");
+    if (!input) return;
+    insertTextAtCursor(input, emoji);
+    pushRecentEmoji(emoji);
+    renderEmojiPicker(state.ui.emojiCategory);
+}
+
+function renderEmojiButtons(container, emojis) {
+    if (!container) return;
+    container.innerHTML = "";
+    emojis.forEach((emoji) => {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "emoji-btn";
+        btn.textContent = emoji;
+        btn.onclick = () => insertEmojiIntoComposer(emoji);
+        container.appendChild(btn);
+    });
+}
+
+function renderEmojiPicker(categoryId = state.ui.emojiCategory || "faces") {
+    const tabs = qs("emojiCategoryTabs");
+    const grid = qs("emojiGrid");
+    const recentSection = qs("emojiRecentSection");
+    const recentGrid = qs("emojiRecentGrid");
+    if (!tabs || !grid || !recentSection || !recentGrid) return;
+    const categories = CLASSIC_EMOJI_CATEGORIES;
+
+    state.ui.recentEmojis = readRecentEmojis();
+    const active = categories.find((c) => c.id === categoryId)
+        ? categoryId
+        : categories[0].id;
+    state.ui.emojiCategory = active;
+
+    tabs.innerHTML = "";
+    categories.forEach((cat) => {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = `emoji-cat-btn ${cat.id === active ? "active" : ""}`;
+        btn.title = cat.title;
+        btn.textContent = cat.icon;
+        btn.onclick = () => renderEmojiPicker(cat.id);
+        tabs.appendChild(btn);
+    });
+
+    const recent = state.ui.recentEmojis || [];
+    if (recent.length) {
+        show(recentSection);
+        renderEmojiButtons(recentGrid, recent);
+    } else {
+        hide(recentSection);
+        recentGrid.innerHTML = "";
+    }
+
+    const category = categories.find((c) => c.id === active);
+    renderEmojiButtons(grid, category?.emojis || []);
+}
+
+function formatVoiceTime(seconds) {
+    const sec = Math.max(0, Number.isFinite(seconds) ? Math.floor(seconds) : 0);
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
+
+function hydrateVoicePlayers(scope = document) {
+    scope.querySelectorAll(".voice-player").forEach((player) => {
+        if (player.dataset.ready === "1") return;
+        const audio = player.querySelector(".voice-audio");
+        const playBtn = player.querySelector(".voice-play");
+        const progress = player.querySelector(".voice-progress");
+        const timeEl = player.querySelector(".voice-time");
+        if (!audio || !playBtn || !progress || !timeEl) return;
+
+        const syncMeta = () => {
+            const duration = Number.isFinite(audio.duration) ? audio.duration : 0;
+            progress.max = String(Math.max(1, Math.round(duration * 1000)));
+            timeEl.textContent = `${formatVoiceTime(audio.currentTime)} / ${formatVoiceTime(duration)}`;
+        };
+
+        const syncProgress = () => {
+            if (!Number.isFinite(audio.duration) || audio.duration <= 0) {
+                progress.value = "0";
+                return;
+            }
+            progress.value = String(Math.round(audio.currentTime * 1000));
+            timeEl.textContent = `${formatVoiceTime(audio.currentTime)} / ${formatVoiceTime(audio.duration)}`;
+        };
+
+        const setPlaying = (playing) => {
+            playBtn.classList.toggle("is-playing", !!playing);
+            playBtn.textContent = playing ? "⏸" : "▶";
+            playBtn.title = playing ? "Pause" : "Play";
+        };
+
+        playBtn.onclick = async () => {
+            try {
+                if (!audio.paused) {
+                    audio.pause();
+                    return;
+                }
+                document.querySelectorAll(".voice-audio").forEach((other) => {
+                    if (other !== audio && !other.paused) other.pause();
+                });
+                await audio.play();
+            } catch (_) {}
+        };
+
+        progress.addEventListener("input", () => {
+            if (!Number.isFinite(audio.duration) || audio.duration <= 0) return;
+            audio.currentTime = Number(progress.value) / 1000;
+        });
+
+        audio.addEventListener("loadedmetadata", syncMeta);
+        audio.addEventListener("durationchange", syncMeta);
+        audio.addEventListener("timeupdate", syncProgress);
+        audio.addEventListener("play", () => setPlaying(true));
+        audio.addEventListener("pause", () => setPlaying(false));
+        audio.addEventListener("ended", () => {
+            audio.currentTime = 0;
+            setPlaying(false);
+            syncProgress();
+        });
+
+        setPlaying(false);
+        syncMeta();
+        syncProgress();
+        player.dataset.ready = "1";
+    });
+}
+
 function messageBody(m) {
     const text = toMultilineHtml(m.text || "");
     const parts = [];
@@ -438,12 +786,70 @@ function messageBody(m) {
     return `${text ? `${text}<br>` : ""}<a href="${fileUrl}" target="_blank" download="${escapeHtml(m.file_name || "Файл")}">${escapeHtml(m.file_name || "Файл")} ⬇️</a>`;
 }
 
+function messageBodyV2(m) {
+    const text = toMultilineHtml(m.text || "");
+    const parts = [];
+    const replyId = Number(m.reply_to_message_id || 0);
+    if (replyId) {
+        const reply = m.reply_preview || null;
+        const replyAuthor = reply?.nickname || "Сообщение удалено";
+        const replyText = reply ? messagePreviewText(reply) : "Сообщение удалено";
+        parts.push(
+            `<button type="button" class="message-reply-ref ${reply ? "" : "missing"}" data-reply-id="${replyId}"><span class="message-reply-author">${escapeHtml(replyAuthor)}</span><span class="message-reply-text">${escapeHtml(replyText)}</span></button>`,
+        );
+    }
+    if (text) parts.push(`<div class="message-text">${text}</div>`);
+    if (!m.file_url) return parts.join("");
+
+    const fileUrl = withMediaToken(m.file_url);
+    const downloadName = escapeHtml(m.file_name || mediaFallbackName(m.kind));
+
+    if (m.kind === "image" || m.kind === "sticker" || m.kind === "emoji") {
+        parts.push(
+            `<div class="message-media-wrap"><img class="message-image" src="${fileUrl}" alt="${downloadName}" loading="lazy"><a class="message-download-btn" href="${fileUrl}" download="${downloadName}" title="Скачать">⬇</a></div>`,
+        );
+        return parts.join("");
+    }
+
+    if (m.kind === "circle") {
+        parts.push(
+            `<div class="message-circle-wrap"><video class="message-circle" src="${fileUrl}" controls playsinline webkit-playsinline preload="metadata"></video><a class="message-download-btn" href="${fileUrl}" download="${downloadName}" title="Скачать">⬇</a></div>`,
+        );
+        return parts.join("");
+    }
+
+    if (m.kind === "video") {
+        parts.push(
+            `<div class="message-media-wrap"><video class="message-video" src="${fileUrl}" controls playsinline webkit-playsinline preload="metadata"></video><a class="message-download-btn" href="${fileUrl}" download="${downloadName}" title="Скачать">⬇</a></div>`,
+        );
+        return parts.join("");
+    }
+
+    if (m.kind === "voice") {
+        parts.push(
+            `<div class="voice-player"><button class="voice-play" type="button" title="Play">▶</button><input class="voice-progress" type="range" min="0" max="1000" value="0"><span class="voice-time">00:00 / 00:00</span><a class="voice-download" href="${fileUrl}" download="${downloadName}" title="Скачать">⬇</a><audio class="voice-audio" preload="metadata" src="${fileUrl}"></audio></div>`,
+        );
+        return parts.join("");
+    }
+
+    parts.push(
+        `<a class="message-file" href="${fileUrl}" target="_blank" download="${downloadName}">${downloadName} ⬇</a>`,
+    );
+    return parts.join("");
+}
+
 function appendMessage(m) {
+    state.messagesById.set(Number(m.id), m);
     const mine = m.user_id === state.me?.id;
     const isRead = mine && m.read_count > 0;
     const item = document.createElement("div");
     item.dataset.mid = String(m.id);
+    item.dataset.uid = String(m.user_id);
     item.dataset.mine = mine ? "1" : "0";
+    if (m.file_url) {
+        item.dataset.fileUrl = withMediaToken(m.file_url);
+        item.dataset.fileName = m.file_name || mediaFallbackName(m.kind);
+    }
     item.className = `message ${mine ? "mine" : ""}`;
     const statusHtml = mine
         ? `<span class="msg-status ${isRead ? "read" : ""}" data-mid="${m.id}">${isRead ? "✓✓" : "✓"}</span>`
@@ -457,17 +863,38 @@ function appendMessage(m) {
                 <span>${formatTime(m.created_at)}</span>
                 ${statusHtml}
             </div>
-            <div class="message-content">${messageBody(m)}</div>
+            <div class="message-content">${messageBodyV2(m)}</div>
         </div>
     `;
     const messages = qs("messages");
     if (messages) {
         messages.appendChild(item);
         messages.scrollTop = messages.scrollHeight;
+        hydrateVoicePlayers(item);
     }
+
+    const avatar = item.querySelector(":scope > .avatar");
+    const author = item.querySelector(".message-author");
+    [avatar, author].forEach((el) => {
+        if (!el) return;
+        el.style.cursor = "pointer";
+        el.onclick = (e) => {
+            e.stopPropagation();
+            openUserProfile(m.user_id);
+        };
+    });
+    item.querySelectorAll(".message-reply-ref[data-reply-id]").forEach((btn) => {
+        btn.onclick = (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            scrollToMessage(Number(btn.dataset.replyId));
+        };
+    });
 }
 
 function removeMessageById(messageId) {
+    state.messagesById.delete(Number(messageId));
+    if (state.ui.replyTo?.id === Number(messageId)) clearReplyTarget();
     qs("messages")?.querySelector(`[data-mid="${messageId}"]`)?.remove();
 }
 
@@ -487,6 +914,141 @@ function renderProfileMini() {
             <div class="profile-id">#${state.me.id}</div>
         </div>
     `;
+}
+
+async function openUserProfile(userId) {
+    if (!userId) return;
+    let profile;
+    try {
+        profile = await api(`/api/users/${Number(userId)}`);
+    } catch (e) {
+        if (String(e.message || "").includes("403")) {
+            alert("Профиль недоступен");
+            return;
+        }
+        if (String(e.message || "").includes("404")) {
+            alert("Пользователь не найден");
+            return;
+        }
+        alert(e.message || "Не удалось открыть профиль");
+        return;
+    }
+
+    state.ui.userView = profile;
+    const avatar = qs("userViewAvatar");
+    const nickname = qs("userViewNickname");
+    const username = qs("userViewUsername");
+    const uid = qs("userViewId");
+    const about = qs("userViewAbout");
+    const status = qs("userViewStatus");
+    const btnMessage = qs("userViewMessageBtn");
+    const btnFriend = qs("userViewFriendBtn");
+    const dialog = qs("userViewDialog");
+    if (!dialog) return;
+
+    if (avatar) {
+        avatar.innerHTML = avatarMarkup({
+            avatar: profile.avatar,
+            label: profile.nickname || profile.username,
+            seed: `profile-${profile.id}`,
+            className: "avatar-xl",
+        });
+    }
+    if (nickname) nickname.textContent = profile.nickname || "Профиль";
+    if (username) username.textContent = `@${profile.username || "user"}`;
+    if (uid) uid.textContent = `#${profile.id}`;
+    if (about)
+        about.textContent =
+            String(profile.about || "").trim() ||
+            "Информация о пользователе пока не заполнена.";
+
+    if (btnMessage) {
+        btnMessage.disabled = !profile.can_open_direct || !!profile.is_self;
+        btnMessage.textContent = "Чат";
+        btnMessage.onclick = async () => {
+            if (!profile.can_open_direct) return;
+            try {
+                const out = await api("/api/chats/direct", {
+                    method: "POST",
+                    body: JSON.stringify({ user_id: profile.id }),
+                });
+                dialog.close();
+                await loadChats();
+                await openChat(out.chat_id);
+            } catch (e) {
+                alert(e.message);
+            }
+        };
+    }
+
+    if (btnFriend) {
+        btnFriend.disabled = false;
+        btnFriend.classList.add("ghost");
+        if (profile.is_self) {
+            btnFriend.textContent = "Это вы";
+            btnFriend.disabled = true;
+        } else if (profile.blocked_by_me) {
+            btnFriend.textContent = "Разблокировать";
+            btnFriend.onclick = async () => {
+                try {
+                    await api(`/api/users/${profile.id}/block`, {
+                        method: "DELETE",
+                    });
+                    await Promise.all([refreshSide(), openUserProfile(profile.id)]);
+                } catch (e) {
+                    alert(e.message);
+                }
+            };
+        } else if (profile.incoming_request_id) {
+            btnFriend.textContent = "Принять заявку";
+            btnFriend.onclick = async () => {
+                try {
+                    await api(`/api/friends/request/${profile.incoming_request_id}/accept`, {
+                        method: "POST",
+                        body: "{}",
+                    });
+                    await Promise.all([refreshSide(), openUserProfile(profile.id)]);
+                } catch (e) {
+                    alert(e.message);
+                }
+            };
+        } else if (profile.outgoing_request_id) {
+            btnFriend.textContent = "Заявка отправлена";
+            btnFriend.disabled = true;
+        } else if (profile.is_friend) {
+            btnFriend.textContent = "В друзьях";
+            btnFriend.disabled = true;
+        } else if (profile.can_send_friend_request) {
+            btnFriend.textContent = "Добавить";
+            btnFriend.onclick = async () => {
+                try {
+                    await api("/api/friends/request", {
+                        method: "POST",
+                        body: JSON.stringify({ username: profile.username }),
+                    });
+                    await Promise.all([refreshSide(), openUserProfile(profile.id)]);
+                } catch (e) {
+                    alert(e.message);
+                }
+            };
+        } else {
+            btnFriend.textContent = "Недоступно";
+            btnFriend.disabled = true;
+        }
+    }
+
+    if (status) {
+        const hints = [];
+        if (profile.is_self) hints.push("Ваш профиль");
+        if (profile.blocked_by_me) hints.push("Пользователь заблокирован вами");
+        if (profile.blocked_by_target) hints.push("Пользователь ограничил доступ");
+        if (profile.is_friend) hints.push("Вы в друзьях");
+        if (profile.outgoing_request_id) hints.push("Исходящая заявка ожидает");
+        if (profile.incoming_request_id) hints.push("Есть входящая заявка");
+        status.textContent = hints.join(" • ");
+    }
+
+    dialog.showModal();
 }
 
 function renderChatList(filter = "") {
@@ -562,6 +1124,20 @@ function setChatHeader(chat) {
             seed: chat ? `chat-${chat.id}-${titleText}` : "empty-chat",
             className: "avatar-xl avatar-placeholder",
         });
+    if (avatarEl) {
+        avatarEl.style.cursor = chat?.type === "direct" ? "pointer" : "default";
+        avatarEl.onclick =
+            chat?.type === "direct" && chat?.peer?.id
+                ? () => openUserProfile(chat.peer.id)
+                : null;
+    }
+    if (titleEl) {
+        titleEl.style.cursor = chat?.type === "direct" ? "pointer" : "default";
+        titleEl.onclick =
+            chat?.type === "direct" && chat?.peer?.id
+                ? () => openUserProfile(chat.peer.id)
+                : null;
+    }
     if (!chat) state.membersById = new Map();
 
     if (canCall) show(btnCall);
@@ -620,6 +1196,11 @@ async function loadMembers(chatId) {
                 </div>
             </div>
         `;
+        const head = el.querySelector(".item-head");
+        if (head) {
+            head.style.cursor = "pointer";
+            head.onclick = () => openUserProfile(m.id);
+        }
         const actions = document.createElement("div");
         actions.className = "actions";
         if (m.id !== state.me.id) {
@@ -721,6 +1302,7 @@ async function loadMembers(chatId) {
 
 async function openChat(chatId) {
     closeMembersSheet({ immediate: true });
+    clearReplyTarget();
     const chat = state.chats.find((c) => c.id === chatId) || null;
     state.currentChat = chat;
     state.currentChatId = chatId;
@@ -730,6 +1312,7 @@ async function openChat(chatId) {
     if (window.innerWidth <= 980) document.body.classList.remove("menu-open");
     const messages = qs("messages");
     if (messages) messages.innerHTML = "";
+    state.messagesById.clear();
     const data = await api(`/api/chats/${chatId}/messages`);
     data.forEach(appendMessage);
     await markChatRead(chatId);
@@ -776,6 +1359,11 @@ async function loadFriends() {
                 </div>
             </div>
         `;
+        const head = el.querySelector(".item-head");
+        if (head) {
+            head.style.cursor = "pointer";
+            head.onclick = () => openUserProfile(f.id);
+        }
         const actions = document.createElement("div");
         actions.className = "actions";
         const dm = document.createElement("button");
@@ -957,6 +1545,8 @@ async function sendMessage({ text = "", file = null, kind = "text" }) {
     const form = new FormData();
     form.append("text", text);
     form.append("kind", kind);
+    const replyToId = Number(state.ui.replyTo?.id || 0);
+    if (replyToId > 0) form.append("reply_to", String(replyToId));
     if (file) form.append("file", file, file.name || "upload.bin");
     await api(`/api/chats/${state.currentChatId}/messages`, {
         method: "POST",
@@ -965,17 +1555,21 @@ async function sendMessage({ text = "", file = null, kind = "text" }) {
     });
     const input = qs("messageInput");
     if (input) input.value = "";
+    clearReplyTarget();
 }
 
 async function sendAssetMessage(assetId) {
     if (!state.currentChatId) return;
     const form = new FormData();
     form.append("asset_id", String(assetId));
+    const replyToId = Number(state.ui.replyTo?.id || 0);
+    if (replyToId > 0) form.append("reply_to", String(replyToId));
     await api(`/api/chats/${state.currentChatId}/messages/asset`, {
         method: "POST",
         body: form,
         headers: {},
     });
+    clearReplyTarget();
 }
 
 async function loadAssets() {
@@ -1025,6 +1619,13 @@ async function loadAssets() {
     });
 }
 
+function setRecorderButtonState(buttonId, active, activeTitle, idleTitle) {
+    const btn = qs(buttonId);
+    if (!btn) return;
+    btn.classList.toggle("is-recording", !!active);
+    btn.title = active ? activeTitle : idleTitle;
+}
+
 async function startVoiceRecord() {
     if (state.mediaRecorder) {
         state.mediaRecorder.stop();
@@ -1041,7 +1642,7 @@ async function startVoiceRecord() {
             : new MediaRecorder(stream);
         state.mediaRecorder = rec;
         const btn = qs("btnVoice");
-        if (btn) btn.textContent = "Стоп";
+        if (btn) btn.textContent = "🎤";
         rec.ondataavailable = (e) => chunks.push(e.data);
         rec.onstop = async () => {
             const outMime = rec.mimeType || mimeType || "audio/webm";
@@ -1053,10 +1654,28 @@ async function startVoiceRecord() {
             await sendMessage({ file, kind: "voice" });
             stream.getTracks().forEach((t) => t.stop());
             state.mediaRecorder = null;
-            if (btn) btn.textContent = "Голос";
+            setRecorderButtonState(
+                "btnVoice",
+                false,
+                "Stop voice recording",
+                "Voice message",
+            );
+            if (btn) btn.textContent = "🎤";
         };
         rec.start();
+        setRecorderButtonState(
+            "btnVoice",
+            true,
+            "Stop voice recording",
+            "Voice message",
+        );
     } catch (e) {
+        setRecorderButtonState(
+            "btnVoice",
+            false,
+            "Stop voice recording",
+            "Voice message",
+        );
         alert("Ошибка доступа к микрофону: " + e.message);
     }
 }
@@ -1078,7 +1697,13 @@ async function startCircleRecord() {
             : new MediaRecorder(stream);
         state.circleRecorder = rec;
         const btn = qs("btnCircle");
-        if (btn) btn.textContent = "Стоп";
+        setRecorderButtonState(
+            "btnCircle",
+            true,
+            "Stop circle recording",
+            "Circle message",
+        );
+        if (btn) btn.textContent = "📹";
         rec.ondataavailable = (e) => chunks.push(e.data);
         rec.onstop = async () => {
             const outMime = rec.mimeType || mimeType || "video/webm";
@@ -1090,10 +1715,22 @@ async function startCircleRecord() {
             await sendMessage({ file, kind: "circle" });
             stream.getTracks().forEach((t) => t.stop());
             state.circleRecorder = null;
-            if (btn) btn.textContent = "Кружок";
+            setRecorderButtonState(
+                "btnCircle",
+                false,
+                "Stop circle recording",
+                "Circle message",
+            );
+            if (btn) btn.textContent = "📹";
         };
         rec.start();
     } catch (e) {
+        setRecorderButtonState(
+            "btnCircle",
+            false,
+            "Stop circle recording",
+            "Circle message",
+        );
         alert("Ошибка доступа к камере: " + e.message);
     }
 }
@@ -1174,7 +1811,6 @@ function createCallTile(userId, isLocal) {
     video.setAttribute("playsinline", "");
     video.setAttribute("webkit-playsinline", "");
     video.muted = true;
-    if (isLocal) video.style.transform = "scaleX(-1)";
 
     // <audio> — только звук, для удалённых участников
     const audio = document.createElement("audio");
@@ -1197,6 +1833,75 @@ function createCallTile(userId, isLocal) {
     grid.appendChild(tile);
 
     return { tile, video, audio, who, stateSpan };
+}
+
+function getLocalVideoTrack() {
+    return state.call.localStream?.getVideoTracks?.()[0] || null;
+}
+
+function rememberFacingFromTrack(track) {
+    const facing = track?.getSettings?.().facingMode;
+    if (facing === "user" || facing === "environment") {
+        state.devicePrefs.camFacing = facing;
+    }
+}
+
+function syncLocalVideoOrientation() {
+    const card = state.call.tiles.get(state.me?.id);
+    if (!card?.tile) return;
+    const tile = card.tile;
+    tile.classList.remove("cam-front", "cam-back", "screen-share");
+
+    if (state.call.screen) {
+        tile.classList.add("screen-share");
+        return;
+    }
+
+    const track = getLocalVideoTrack();
+    const facing = track?.getSettings?.().facingMode || state.devicePrefs.camFacing;
+    if (facing === "environment") tile.classList.add("cam-back");
+    else tile.classList.add("cam-front");
+}
+
+function updateLocalPreviewTrack(track) {
+    const card = state.call.tiles.get(state.me?.id);
+    if (!card) return;
+    if (track) {
+        card.video.srcObject = new MediaStream([track]);
+        safePlayMedia(card.video, true);
+    } else {
+        card.video.srcObject = null;
+    }
+    syncLocalVideoOrientation();
+}
+
+function findVideoSender(pc) {
+    const direct = pc.getSenders().find((s) => s.track?.kind === "video");
+    if (direct) return direct;
+    const viaTransceiver = pc
+        .getTransceivers()
+        .find(
+            (t) =>
+                t.sender &&
+                (t.sender.track?.kind === "video" ||
+                    t.receiver?.track?.kind === "video"),
+        );
+    return viaTransceiver?.sender || null;
+}
+
+async function replaceOutgoingVideoTrack(track) {
+    for (const pc of state.call.peers.values()) {
+        try {
+            const sender = findVideoSender(pc);
+            if (sender) {
+                await sender.replaceTrack(track || null);
+            } else if (track) {
+                pc.addTrack(track, state.call.localStream);
+            }
+        } catch (err) {
+            console.warn("replaceOutgoingVideoTrack failed:", err);
+        }
+    }
 }
 
 // ─── Привязка удалённого потока к tile ───────────────────────────────────────
@@ -1458,11 +2163,8 @@ async function startCall() {
 
     const localCard = createCallTile(state.me?.id, true);
     if (localCard) {
-        localCard.video.srcObject = new MediaStream(
-            state.call.localStream.getTracks(),
-        );
-        safePlayMedia(localCard.video, true);
         state.call.tiles.set(state.me?.id, localCard);
+        updateLocalPreviewTrack(getLocalVideoTrack());
     }
 
     const titleEl = qs("callTitleLabel");
@@ -1533,21 +2235,17 @@ async function toggleMic() {
 async function toggleCam() {
     if (!state.call.active) return;
 
-    const existing = state.call.localStream?.getVideoTracks()[0];
+    const existing = getLocalVideoTrack();
 
     if (existing) {
         // Выключаем камеру
+        await replaceOutgoingVideoTrack(null);
         existing.stop();
         state.call.localStream.removeTrack(existing);
         state.call.cam = false;
         state.call.screen = false;
 
-        for (const pc of state.call.peers.values()) {
-            const sender = pc
-                .getSenders()
-                .find((s) => s.track?.kind === "video");
-            if (sender) await sender.replaceTrack(null);
-        }
+        updateLocalPreviewTrack(null);
     } else {
         // Включаем камеру
         try {
@@ -1561,35 +2259,17 @@ async function toggleCam() {
             const stream =
                 await navigator.mediaDevices.getUserMedia(constraints);
             const track = stream.getVideoTracks()[0];
+            if (!track) throw new Error("No camera track");
+            rememberFacingFromTrack(track);
             state.call.localStream.addTrack(track);
             state.call.cam = true;
             state.call.screen = false;
 
-            for (const pc of state.call.peers.values()) {
-                const sender = pc
-                    .getSenders()
-                    .find((s) => s.track?.kind === "video");
-                if (sender) {
-                    await sender.replaceTrack(track);
-                } else {
-                    // addTrack → onnegotiationneeded → автоматические переговоры
-                    pc.addTrack(track, state.call.localStream);
-                }
-            }
+            await replaceOutgoingVideoTrack(track);
+            updateLocalPreviewTrack(track);
         } catch (e) {
             alert("Нет доступа к камере: " + e.message);
             return;
-        }
-    }
-
-    const localCard = state.call.tiles.get(state.me?.id);
-    if (localCard) {
-        const vtracks = state.call.localStream?.getVideoTracks() || [];
-        if (vtracks.length) {
-            localCard.video.srcObject = new MediaStream(vtracks);
-            safePlayMedia(localCard.video, true);
-        } else {
-            localCard.video.srcObject = null;
         }
     }
 
@@ -1612,12 +2292,8 @@ async function toggleScreenShare() {
         });
         state.call.screen = false;
         state.call.cam = false;
-        for (const pc of state.call.peers.values()) {
-            const sender = pc
-                .getSenders()
-                .find((s) => s.track?.kind === "video");
-            if (sender) await sender.replaceTrack(null);
-        }
+        await replaceOutgoingVideoTrack(null);
+        updateLocalPreviewTrack(null);
     } else {
         try {
             const stream = await navigator.mediaDevices.getDisplayMedia({
@@ -1625,6 +2301,7 @@ async function toggleScreenShare() {
                 audio: false,
             });
             const track = stream.getVideoTracks()[0];
+            if (!track) throw new Error("No screen track");
             state.call.localStream?.getVideoTracks().forEach((t) => {
                 t.stop();
                 state.call.localStream.removeTrack(t);
@@ -1632,17 +2309,8 @@ async function toggleScreenShare() {
             state.call.localStream.addTrack(track);
             state.call.screen = true;
             state.call.cam = true;
-
-            for (const pc of state.call.peers.values()) {
-                const sender = pc
-                    .getSenders()
-                    .find((s) => s.track?.kind === "video");
-                if (sender) {
-                    await sender.replaceTrack(track);
-                } else {
-                    pc.addTrack(track, state.call.localStream);
-                }
-            }
+            await replaceOutgoingVideoTrack(track);
+            updateLocalPreviewTrack(track);
             track.onended = () => {
                 if (state.call.screen) toggleScreenShare();
             };
@@ -1652,54 +2320,59 @@ async function toggleScreenShare() {
         }
     }
 
-    const localCard = state.call.tiles.get(state.me?.id);
-    if (localCard) {
-        const vtracks = state.call.localStream?.getVideoTracks() || [];
-        if (vtracks.length) {
-            localCard.video.srcObject = new MediaStream(vtracks);
-            safePlayMedia(localCard.video, true);
-        } else {
-            localCard.video.srcObject = null;
-        }
-    }
-
     updateLocalTileState();
     broadcastCallState();
     updateCallButtons();
 }
 
 async function rotateCamera() {
-    state.devicePrefs.camFacing =
+    const nextFacing =
         state.devicePrefs.camFacing === "environment" ? "user" : "environment";
-    if (!state.call.cam || state.call.screen) return;
+    state.devicePrefs.camFacing = nextFacing;
+    if (!state.call.cam || state.call.screen) {
+        syncLocalVideoOrientation();
+        updateCallButtons();
+        return;
+    }
 
-    const oldTrack = state.call.localStream?.getVideoTracks()[0];
-    if (oldTrack) {
-        oldTrack.stop();
-        state.call.localStream.removeTrack(oldTrack);
+    const oldTrack = getLocalVideoTrack();
+    const attempts = [
+        { video: { facingMode: { exact: nextFacing } }, audio: false },
+        { video: { facingMode: { ideal: nextFacing } }, audio: false },
+        { video: true, audio: false },
+    ];
+
+    let stream = null;
+    let newTrack = null;
+    let lastError = null;
+    for (const constraints of attempts) {
+        try {
+            stream = await navigator.mediaDevices.getUserMedia(constraints);
+            newTrack = stream.getVideoTracks()[0] || null;
+            if (newTrack) break;
+        } catch (err) {
+            lastError = err;
+        }
+    }
+
+    if (!newTrack) {
+        console.error("rotateCamera failed:", lastError);
+        return;
     }
 
     try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-            video: { facingMode: { exact: state.devicePrefs.camFacing } },
-        });
-        const newTrack = stream.getVideoTracks()[0];
+        rememberFacingFromTrack(newTrack);
+        if (oldTrack) state.call.localStream.removeTrack(oldTrack);
         state.call.localStream.addTrack(newTrack);
-
-        for (const pc of state.call.peers.values()) {
-            const sender = pc
-                .getSenders()
-                .find((s) => s.track?.kind === "video");
-            if (sender) await sender.replaceTrack(newTrack);
-        }
-
-        const localCard = state.call.tiles.get(state.me?.id);
-        if (localCard) {
-            localCard.video.srcObject = new MediaStream([newTrack]);
-            safePlayMedia(localCard.video, true);
-        }
+        await replaceOutgoingVideoTrack(newTrack);
+        updateLocalPreviewTrack(newTrack);
+        updateLocalTileState();
+        broadcastCallState();
+        updateCallButtons();
+        if (oldTrack) oldTrack.stop();
     } catch (e) {
         console.error("rotateCamera failed:", e);
+        newTrack.stop();
     }
 }
 
@@ -1778,6 +2451,8 @@ function updateCallButtons() {
         canShare ? show(btnScreen) : hide(btnScreen);
     }
     if (btnRotate) {
+        const canRotate = isMobile && state.call.active && state.call.cam && !state.call.screen;
+        btnRotate.disabled = !canRotate;
         if (isMobile && state.call.active) show(btnRotate);
         else hide(btnRotate);
     }
@@ -1952,7 +2627,7 @@ async function switchMicDevice(deviceId) {
 
 async function switchCamDevice(deviceId) {
     state.devicePrefs.camId = deviceId || "";
-    if (!state.call.active || !state.call.cam) return;
+    if (!state.call.active || !state.call.cam || state.call.screen) return;
     try {
         const stream = await navigator.mediaDevices.getUserMedia({
             video: state.devicePrefs.camId
@@ -1961,24 +2636,15 @@ async function switchCamDevice(deviceId) {
         });
         const newTrack = stream.getVideoTracks()[0];
         if (!newTrack) return;
-        state.call.localStream?.getVideoTracks().forEach((t) => {
-            t.stop();
-            state.call.localStream.removeTrack(t);
-        });
+        rememberFacingFromTrack(newTrack);
+        const oldTrack = getLocalVideoTrack();
+        if (oldTrack) state.call.localStream.removeTrack(oldTrack);
         state.call.localStream?.addTrack(newTrack);
-        for (const pc of state.call.peers.values()) {
-            const sender = pc
-                .getSenders()
-                .find((s) => s.track?.kind === "video");
-            if (sender) await sender.replaceTrack(newTrack);
-        }
-        const localCard = state.call.tiles.get(state.me?.id);
-        if (localCard) {
-            localCard.video.srcObject = new MediaStream(
-                state.call.localStream.getTracks(),
-            );
-            safePlayMedia(localCard.video, true);
-        }
+        await replaceOutgoingVideoTrack(newTrack);
+        updateLocalPreviewTrack(newTrack);
+        updateLocalTileState();
+        updateCallButtons();
+        if (oldTrack) oldTrack.stop();
     } catch (e) {
         console.error("switchCamDevice failed:", e);
     }
@@ -2012,6 +2678,9 @@ function showMessageContextMenu(x, y, msgEl) {
     hideContextMenu();
     const mid = Number(msgEl.dataset.mid);
     const isMine = msgEl.dataset.mine === "1";
+    const fileUrl = msgEl.dataset.fileUrl || "";
+    const fileName = msgEl.dataset.fileName || "file";
+    const payload = state.messagesById.get(mid) || null;
     if (!mid) return;
 
     const menu = document.createElement("div");
@@ -2019,13 +2688,37 @@ function showMessageContextMenu(x, y, msgEl) {
     menu.style.cssText = `position:fixed;z-index:200;left:${x}px;top:${y}px`;
     _ctxMenuEl = menu;
 
+    const btnReply = document.createElement("button");
+    btnReply.textContent = "↩ Reply";
+    btnReply.onclick = () => {
+        hideContextMenu();
+        if (payload) setReplyTarget(payload);
+    };
+    menu.appendChild(btnReply);
+
+    if (fileUrl) {
+        const btnDownload = document.createElement("button");
+        btnDownload.textContent = "⬇ Скачать";
+        btnDownload.onclick = () => {
+            hideContextMenu();
+            const a = document.createElement("a");
+            a.href = fileUrl;
+            a.download = fileName;
+            a.rel = "noopener";
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+        };
+        menu.appendChild(btnDownload);
+    }
+
     const btnDelMe = document.createElement("button");
     btnDelMe.textContent = "🗑️ Удалить у себя";
     btnDelMe.onclick = async () => {
         hideContextMenu();
         try {
             await api(`/api/messages/${mid}?mode=me`, { method: "DELETE" });
-            msgEl.remove();
+            removeMessageById(mid);
         } catch (e) {
             alert(e.message);
         }
@@ -2314,11 +3007,8 @@ function resetCallPeersForRejoin() {
     if (state.call.localStream) {
         const localCard = createCallTile(state.me?.id, true);
         if (localCard) {
-            localCard.video.srcObject = new MediaStream(
-                state.call.localStream.getTracks(),
-            );
-            safePlayMedia(localCard.video, true);
             state.call.tiles.set(state.me?.id, localCard);
+            updateLocalPreviewTrack(getLocalVideoTrack());
         }
     }
 }
@@ -2577,7 +3267,6 @@ function bindUi() {
     setChatOpen(false);
     setEmptyState(true);
     applyTheme(localStorage.getItem(THEME_STORAGE_KEY) || "default", false);
-    settingsSave.onclick
     const gateCode = qs("gateCode");
     if (gateCode)
         gateCode.value = localStorage.getItem("saved_gate_code") || "";
@@ -2644,6 +3333,9 @@ function bindUi() {
     const btnIncomingAccept = qs("btnIncomingAccept");
     const btnIncomingDecline = qs("btnIncomingDecline");
     const incomingCallToast = qs("incomingCallToast");
+    const userViewDialog = qs("userViewDialog");
+    const userViewClose = qs("userViewClose");
+    const btnCancelReply = qs("btnCancelReply");
 
     if (tabChats) tabChats.onclick = () => setMainTab("chats");
     if (tabRequests) tabRequests.onclick = () => setMainTab("requests");
@@ -2745,18 +3437,27 @@ function bindUi() {
         };
 
     if (chatSearch) chatSearch.oninput = () => renderChatList(chatSearch.value);
-    if (sendBtn)
-        sendBtn.onclick = () =>
-            sendMessage({ text: messageInput?.value || "" });
+    const sendTextFromComposer = async () => {
+        const text = messageInput?.value || "";
+        if (!text.trim()) return;
+        try {
+            await sendMessage({ text });
+        } catch (e) {
+            alert(e.message);
+        }
+    };
+    if (sendBtn) sendBtn.onclick = () => void sendTextFromComposer();
     if (messageInput) {
         bindClipboardPaste(messageInput);
         messageInput.addEventListener("keydown", (e) => {
             if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
-                sendMessage({ text: messageInput.value || "" });
+                void sendTextFromComposer();
             }
         });
     }
+    renderReplyComposer();
+    if (btnCancelReply) btnCancelReply.onclick = () => clearReplyTarget();
     const messagesEl = qs("messages");
     if (messagesEl) bindMessageContextMenu(messagesEl);
 
@@ -2767,9 +3468,11 @@ function bindUi() {
     if (btnAssets)
         btnAssets.onclick = async () => {
             await loadAssets();
+            renderEmojiPicker(state.ui.emojiCategory);
             assetsDialog?.showModal();
         };
     if (assetsClose) assetsClose.onclick = () => assetsDialog?.close();
+    if (userViewClose) userViewClose.onclick = () => userViewDialog?.close();
     if (btnUploadAsset)
         btnUploadAsset.onclick = async () => {
             const f = qs("assetFile")?.files[0];
@@ -2985,6 +3688,11 @@ function bindUi() {
                     </div>
                 </div>
             `;
+                const head = el.querySelector(".item-head");
+                if (head) {
+                    head.style.cursor = "pointer";
+                    head.onclick = () => openUserProfile(u.id);
+                }
                 const actions = document.createElement("div");
                 actions.className = "actions";
                 const add = document.createElement("button");
