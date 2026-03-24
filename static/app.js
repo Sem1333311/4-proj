@@ -116,6 +116,11 @@ function setMainTab(tab) {
     document.body.classList.remove("menu-open");
 }
 
+async function openSettingsTab() {
+    setMainTab("settings");
+    await Promise.all([loadSettings(), loadBlockedList()]);
+}
+
 function setChatOpen(open) {
     state.ui.chatOpen = !!open;
     document.body.classList.toggle("chat-open", state.ui.chatOpen);
@@ -2482,7 +2487,7 @@ function bindUi() {
     if (tabRequests) tabRequests.onclick = () => setMainTab("requests");
     if (tabSearch) tabSearch.onclick = () => setMainTab("search");
     if (tabFriends) tabFriends.onclick = () => setMainTab("friends");
-    if (tabSettings) tabSettings.onclick = () => setMainTab("settings");
+    if (tabSettings) tabSettings.onclick = () => openSettingsTab();
     if (btnBack) btnBack.onclick = () => setChatOpen(false);
     if (btnMobile)
         btnMobile.onclick = () => document.body.classList.toggle("menu-open");
@@ -2845,12 +2850,7 @@ function bindUi() {
         };
 
     // Обработчик кнопки настроек в sidebar - переключает на вкладку настроек
-    if (btnSettings)
-        btnSettings.onclick = async () => {
-            setMainTab("settings");
-            await loadSettings();
-            await loadBlockedList();
-        };
+    if (btnSettings) btnSettings.onclick = () => openSettingsTab();
 
     // Переключение видимости настроек времени DND
     const dndEnabledCheckbox = qs("dndEnabled");
