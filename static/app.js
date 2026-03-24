@@ -1,3015 +1,1669 @@
-const state = {
-    token: localStorage.getItem("token") || "",
-    me: null,
-    settings: null,
-    chats: [],
-    friends: [],
-    currentChat: null,
-    currentChatId: null,
-    membersById: new Map(),
-    ws: null,
-    mediaRecorder: null,
-    circleRecorder: null,
-    call: {
-        active: false,
-        chatId: null,
-        startedAt: null,
-        timer: null,
-        mic: true,
-        cam: false,
-        screen: false,
-        localStream: null,
-        peers: new Map(),
-        tiles: new Map(),
-        remoteStreams: new Map(),
-        iceServers: null,
-        pendingCandidates: new Map(),
-    },
-    wsMeta: {
-        reconnectTimer: null,
-        pingTimer: null,
-        pongTimer: null,
-        retry: 0,
-    },
-    syncTimer: null,
-    devicePrefs: {
-        micId: "",
-        camId: "",
-        speakerId: "",
-        audioMode: "speaker",
-        camFacing: "user",
-    },
-    assets: [],
-    ui: {
-        currentTab: "chats",
-        chatOpen: false,
-        callMinimized: false,
-        incomingCall: null,
-    },
-};
+import os
+import json
+import mimetypes
+import base64
+import hashlib
+import logging
+import secrets
+import socket
+import sqlite3
+import subprocess
+import threading
+import uuid
+from datetime import datetime
+from pathlib import Path
+from typing import Optional
+from fastapi import (
+    Depends,
+    FastAPI,
+    File,
+    Form,
+    HTTPException,
+    Request,
+    UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
+)
+from fastapi.responses import HTMLResponse, JSONResponse, Response
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+from fastapi.middleware.cors import CORSMiddleware
+from cryptography.fernet import Fernet, InvalidToken
+from passlib.context import CryptContext
+from pydantic import BaseModel
 
-const isLikelyIOS =
-    /iPad|iPhone|iPod/.test(navigator.userAgent) ||
-    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
-const isLikelyAndroid = /Android/.test(navigator.userAgent);
-const isMobile = isLikelyIOS || isLikelyAndroid;
-const isLikelySafari = /^((?!chrome|android|crios|fxios).)*safari/i.test(
-    navigator.userAgent,
+BASE_DIR = Path(__file__).resolve().parent
+DB_PATH = BASE_DIR / "messenger.db"
+UPLOAD_DIR = BASE_DIR / "uploads"
+UPLOAD_DIR.mkdir(exist_ok=True)
+ACCESS_CODE = "7xTM[xN[K0FEG&wMKU6TYBbyZMu}H7?v*PLsHAyV"
+
+app = FastAPI(title="LAN Messenger")
+
+# Добавляем CORS для кросс-платформенной работы
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
+templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
+
+logger = logging.getLogger("lan_messenger")
+if not logger.handlers:
+    logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper())
+
+pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
+db_lock = threading.Lock()
+
+# Хранилища состояния WebSocket
+active_connections: dict[int, set[WebSocket]] = {}
+call_rooms: dict[int, dict[int, WebSocket]] = {}
+call_states: dict[int, dict[int, dict]] = {}
+call_debug_counts: dict[tuple[int, str], int] = {}
+
+def _call_dbg(chat_id: int, event: str, **kwargs):
+    key = (chat_id, event)
+    call_debug_counts[key] = call_debug_counts.get(key, 0) + 1
+    logger.debug("call chat=%s event=%s count=%s data=%s", chat_id, event, call_debug_counts[key], kwargs)
+
+def _build_ice_servers() -> list[dict]:
+    raw = os.getenv("RTC_ICE_SERVERS", "").strip()
+    if raw:
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, list) and parsed:
+                servers = []
+                for idx, item in enumerate(parsed):
+                    if not isinstance(item, dict):
+                        continue
+                    urls = item.get("urls")
+                    if not urls:
+                        continue
+                    out = {"urls": urls}
+                    if item.get("username"):
+                        out["username"] = str(item.get("username"))
+                    if item.get("credential"):
+                        out["credential"] = str(item.get("credential"))
+                    servers.append(out)
+                if servers:
+                    return servers
+        except Exception as exc:
+            logger.warning("RTC_ICE_SERVERS parse failed: %s; using fallback", exc)
+    
+    turn_user = os.getenv("TURN_USERNAME", "").strip()
+    turn_pass = os.getenv("TURN_CREDENTIAL", "").strip()
+    turn_udp = os.getenv("TURN_URL_UDP", "").strip()
+    turn_tcp = os.getenv("TURN_URL_TCP", "").strip()
+    old_turn = os.getenv("TURN_URL", "").strip()
+    
+    if old_turn and not turn_udp and not turn_tcp:
+        turn_udp = old_turn
+
+    servers = [{"urls": "stun:stun.l.google.com:19302"}]
+    for turn_url in [turn_udp, turn_tcp]:
+        if not turn_url:
+            continue
+        turn_cfg = {"urls": turn_url}
+        if turn_user:
+            turn_cfg["username"] = turn_user
+        if turn_pass:
+            turn_cfg["credential"] = turn_pass
+        servers.append(turn_cfg)
+    return servers
+
+ICE_SERVERS = _build_ice_servers()
+
+def _detect_windows_lan_ip() -> Optional[str]:
+    command = [
+        "powershell",
+        "-NoProfile",
+        "-Command",
+        (
+            '$blockedInterfaces = "Loopback|Bluetooth|Virtual|vEthernet|WSL|Hyper-V|Docker|Tailscale|singbox|ZeroTier|VMware|VirtualBox"; '
+            "Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | "
+            "Where-Object { "
+            "$_.IPAddress -notlike '127.*' -and "
+            "$_.IPAddress -notlike '169.254.*' -and "
+            "$_.PrefixOrigin -ne 'WellKnown' -and "
+            "$_.InterfaceAlias -notmatch $blockedInterfaces "
+            "} | "
+            "Select-Object -ExpandProperty IPAddress -First 1"
+        ),
+    ]
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=3, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+    for line in (result.stdout or "").splitlines():
+        ip = line.strip()
+        if ip:
+            return ip
+    return None
+
+def _detect_primary_lan_ip() -> Optional[str]:
+    if os.name == "nt":
+        windows_ip = _detect_windows_lan_ip()
+        if windows_ip:
+            return windows_ip
+
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+            probe.connect(("8.8.8.8", 80))
+            ip = probe.getsockname()[0]
+            if ip and not ip.startswith(("127.", "169.254.")):
+                return ip
+    except OSError:
+        pass
+
+    try:
+        for _, _, _, _, sockaddr in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            ip = sockaddr[0]
+            if ip and not ip.startswith(("127.", "169.254.")):
+                return ip
+    except OSError:
+        pass
+
+    return None
+
+def _log_access_urls(host: str, port: int) -> None:
+    logger.info("LAN Messenger starting on %s:%s", host, port)
+    logger.info("Open on this computer: http://127.0.0.1:%s", port)
+
+    if host in {"0.0.0.0", "::"}:
+        lan_ip = _detect_primary_lan_ip()
+        if lan_ip:
+            logger.info("Open from phone on the same Wi-Fi: http://%s:%s", lan_ip, port)
+        else:
+            logger.info("LAN IP was not detected automatically. Use this computer's IPv4 address with port %s.", port)
+        logger.info("If another device cannot connect, allow inbound TCP port %s in Windows Firewall.", port)
+        return
+
+    if host not in {"127.0.0.1", "localhost"}:
+        logger.info("Open from other devices with: http://%s:%s", host, port)
+
+def _build_file_fernet() -> Fernet:
+    raw = os.getenv("FILE_ENCRYPTION_KEY", "").strip()
+    if raw:
+        try:
+            return Fernet(raw.encode("utf-8"))
+        except Exception:
+            pass
+    digest = hashlib.sha256(ACCESS_CODE.encode("utf-8")).digest()
+    return Fernet(base64.urlsafe_b64encode(digest))
+
+FILE_FERNET = _build_file_fernet()
+
+def write_encrypted_file(path: Path, payload: bytes):
+    path.write_bytes(FILE_FERNET.encrypt(payload))
+
+def read_encrypted_file(path: Path) -> bytes:
+    blob = path.read_bytes()
+    try:
+        return FILE_FERNET.decrypt(blob)
+    except InvalidToken:
+        return blob
+
+class GateIn(BaseModel):
+    code: str
+
+class RegisterIn(BaseModel):
+    username: str
+    password: str
+    nickname: str
+
+class LoginIn(BaseModel):
+    username: str
+    password: str
+
+class ProfileIn(BaseModel):
+    nickname: str
+    about: str = ""
+
+class FriendRequestIn(BaseModel):
+    username: str
+
+class UsernameIn(BaseModel):
+    username: str
+
+class DirectIn(BaseModel):
+    user_id: int
+
+class GroupIn(BaseModel):
+    title: str
+    members: list[str] = []
+
+class MemberRoleIn(BaseModel):
+    role: str
+
+class SettingsIn(BaseModel):
+    allow_friend_requests: str = "everyone"
+    allow_calls_from: str = "friends"
+    allow_group_invites: str = "friends"
+    show_last_seen: str = "friends"
+    theme: str = "default"
+
+class PasswordChangeIn(BaseModel):
+    old_password: str
+    new_password: str
+
+VALID_SETTING_VALUES = {
+    "allow_friend_requests": {"everyone", "friends", "nobody"},
+    "allow_calls_from": {"everyone", "friends", "nobody"},
+    "allow_group_invites": {"everyone", "friends", "nobody"},
+    "show_last_seen": {"everyone", "friends", "nobody"},
+    "theme": {"default", "light", "burgundy", "black"},
+}
+
+def get_db():
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+def now_iso() -> str:
+    return datetime.utcnow().isoformat(timespec="seconds") + "Z"
+
+def hash_password(password: str) -> str:
+    return pwd_context.hash(password)
+
+def verify_password(password: str, password_hash: str) -> bool:
+    return pwd_context.verify(password, password_hash)
+
+def serialize_user(row: sqlite3.Row) -> dict:
+    return {
+        "id": row["id"],
+        "username": row["username"],
+        "nickname": row["nickname"],
+        "avatar": row["avatar"],
+        "about": row["about"] or "",
+    }
+
+def init_db():
+    conn = get_db()
+    with conn:
+        conn.executescript("""
+                           
+PRAGMA journal_mode=WAL;
+CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT UNIQUE NOT NULL,
+    password_hash TEXT NOT NULL,
+    nickname TEXT NOT NULL,
+    avatar TEXT,
+    about TEXT,
+    created_at TEXT NOT NULL
 );
-const isLocalDevHost = ["localhost", "127.0.0.1", "[::1]"].includes(
-    location.hostname,
+CREATE TABLE IF NOT EXISTS sessions (
+    token TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
 );
+CREATE TABLE IF NOT EXISTS user_settings (
+    user_id INTEGER PRIMARY KEY,
+    allow_friend_requests TEXT NOT NULL DEFAULT 'everyone',
+    allow_calls_from TEXT NOT NULL DEFAULT 'friends',
+    allow_group_invites TEXT NOT NULL DEFAULT 'friends',
+    show_last_seen TEXT NOT NULL DEFAULT 'friends',
+    theme TEXT NOT NULL DEFAULT 'default',
+    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS blocked_users (
+    blocker_id INTEGER NOT NULL,
+    blocked_id INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(blocker_id, blocked_id),
+    FOREIGN KEY(blocker_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY(blocked_id) REFERENCES users(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS friend_requests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    from_user_id INTEGER NOT NULL,
+    to_user_id INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    created_at TEXT NOT NULL,
+    UNIQUE(from_user_id, to_user_id),
+    FOREIGN KEY(from_user_id) REFERENCES users(id),
+    FOREIGN KEY(to_user_id) REFERENCES users(id)
+);
+CREATE TABLE IF NOT EXISTS friends (
+    user_id INTEGER NOT NULL,
+    friend_id INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(user_id, friend_id),
+    FOREIGN KEY(user_id) REFERENCES users(id),
+    FOREIGN KEY(friend_id) REFERENCES users(id)
+);
+CREATE TABLE IF NOT EXISTS chats (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    type TEXT NOT NULL,
+    title TEXT,
+    created_by INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY(created_by) REFERENCES users(id)
+);
+CREATE TABLE IF NOT EXISTS chat_members (
+    chat_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    role TEXT NOT NULL DEFAULT 'member',
+    joined_at TEXT NOT NULL,
+    UNIQUE(chat_id, user_id),
+    FOREIGN KEY(chat_id) REFERENCES chats(id) ON DELETE CASCADE,
+    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'text',
+    text TEXT,
+    file_path TEXT,
+    file_name TEXT,
+    mime_type TEXT,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY(chat_id) REFERENCES chats(id) ON DELETE CASCADE,
+    FOREIGN KEY(user_id) REFERENCES users(id)
+);
+CREATE TABLE IF NOT EXISTS message_deleted_for (
+    message_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(message_id, user_id),
+    FOREIGN KEY(message_id) REFERENCES messages(id) ON DELETE CASCADE,
+    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS custom_assets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    title TEXT,
+    file_path TEXT NOT NULL,
+    file_name TEXT,
+    mime_type TEXT,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS group_invites (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_id INTEGER NOT NULL,
+    inviter_id INTEGER NOT NULL,
+    invitee_id INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    created_at TEXT NOT NULL,
+    UNIQUE(chat_id, invitee_id, status),
+    FOREIGN KEY(chat_id) REFERENCES chats(id) ON DELETE CASCADE,
+    FOREIGN KEY(inviter_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY(invitee_id) REFERENCES users(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS message_reads (
+    message_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    read_at TEXT NOT NULL,
+    PRIMARY KEY (message_id, user_id),
+    FOREIGN KEY(message_id) REFERENCES messages(id) ON DELETE CASCADE,
+    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+        """)
+        
+def init_db():
+    conn = get_db()
+    with conn:
+        conn.executescript("""
+        ...
+        """)
 
-// ─── Разблокировка AudioContext (autoplay) ────────────────────────────────────
-let _audioCtxUnlocked = false;
-
-async function unlockAudioContext() {
-    if (_audioCtxUnlocked) return;
-    try {
-        const ctx = new (window.AudioContext || window.webkitAudioContext)();
-        const buf = ctx.createBuffer(1, 1, 22050);
-        const src = ctx.createBufferSource();
-        src.buffer = buf;
-        src.connect(ctx.destination);
-        src.start(0);
-        await ctx.resume();
-        _audioCtxUnlocked = true;
-        console.log("AudioContext unlocked");
-    } catch (e) {
-        console.warn("AudioContext unlock failed:", e);
-    }
-}
-
-// ─── Утилиты ──────────────────────────────────────────────────────────────────
-
-function qs(id) {
-    return document.getElementById(id);
-}
-function show(el) {
-    if (el) el.classList.remove("hidden");
-}
-function hide(el) {
-    if (el) el.classList.add("hidden");
-}
-
-function setMainTab(tab) {
-    state.ui.currentTab = tab;
-    const pairs = [
-        ["chats", "paneChats", "tabChats"],
-        ["requests", "paneRequests", "tabRequests"],
-        ["search", "paneSearch", "tabSearch"],
-        ["friends", "paneFriends", "tabFriends"],
-        ["settings", "viewSettings", "tabSettings"],
-    ];
-    for (const [key, paneId, btnId] of pairs) {
-        const pane = qs(paneId);
-        const btn = qs(btnId);
-        if (!pane || !btn) continue;
-        if (key === tab) {
-            show(pane);
-            btn.classList.add("active");
-        } else {
-            hide(pane);
-            btn.classList.remove("active");
+        cols = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(user_settings)").fetchall()
         }
-    }
-    document.body.classList.remove("menu-open");
-}
-
-async function openSettingsTab() {
-    setMainTab("settings");
-    await Promise.all([loadSettings(), loadBlockedList()]);
-}
-
-function setChatOpen(open) {
-    state.ui.chatOpen = !!open;
-    document.body.classList.toggle("chat-open", state.ui.chatOpen);
-    // Управляем классом chat-active для скрытия нижнего меню на мобилках
-    document.body.classList.toggle("chat-active", state.ui.chatOpen);
-    if (window.innerWidth <= 980) {
-        document.body.classList.toggle("menu-open", !state.ui.chatOpen);
-    }
-    const back = qs("btnBackToList");
-    if (!back) return;
-    if (state.ui.chatOpen) show(back);
-    else hide(back);
-}
-
-function escapeHtml(v) {
-    return (v || "")
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;");
-}
-
-function setError(id, text) {
-    const el = qs(id);
-    if (el) el.textContent = text || "";
-}
-
-function syncViewportHeight() {
-    const h = Math.round(
-        window.visualViewport?.height ||
-            window.innerHeight ||
-            document.documentElement.clientHeight ||
-            0,
-    );
-    if (h > 0)
-        document.documentElement.style.setProperty("--app-height", `${h}px`);
-}
-
-function installResponsiveEnvironment() {
-    document.body.classList.toggle("platform-ios", isLikelyIOS);
-    document.body.classList.toggle("platform-android", isLikelyAndroid);
-    document.body.classList.toggle("platform-safari", isLikelySafari);
-    document.body.classList.toggle("platform-mobile", isMobile);
-    syncViewportHeight();
-    if (!window.__lanMessengerViewportBound) {
-        window.addEventListener("resize", syncViewportHeight);
-        window.visualViewport?.addEventListener("resize", syncViewportHeight);
-        window.__lanMessengerViewportBound = true;
-    }
-}
-
-function formatTime(iso) {
-    const date = new Date(iso);
-    if (Number.isNaN(date.getTime())) return "";
-    return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-}
-
-function formatListTime(iso) {
-    if (!iso) return "";
-    const date = new Date(iso);
-    if (Number.isNaN(date.getTime())) return "";
-    const now = new Date();
-    if (date.toDateString() === now.toDateString()) {
-        return date.toLocaleTimeString([], {
-            hour: "2-digit",
-            minute: "2-digit",
-        });
-    }
-    return date.toLocaleDateString([], { day: "2-digit", month: "2-digit" });
-}
-
-function fmtDuration(sec) {
-    const m = Math.floor(sec / 60);
-    const s = sec % 60;
-    return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
-}
-
-function pickRecorderMime(kind) {
-    const options =
-        kind === "audio"
-            ? ["audio/mp4", "audio/webm;codecs=opus", "audio/webm"]
-            : ["video/mp4", "video/webm;codecs=vp8,opus", "video/webm"];
-    for (const m of options) {
-        if (
-            window.MediaRecorder &&
-            MediaRecorder.isTypeSupported &&
-            MediaRecorder.isTypeSupported(m)
-        )
-            return m;
-    }
-    return "";
-}
-
-function extForMime(mime, fallback) {
-    if (!mime) return fallback;
-    if (mime.includes("mp4")) return "mp4";
-    if (mime.includes("webm")) return "webm";
-    return fallback;
-}
-
-async function api(path, opts = {}) {
-    const headers = opts.headers || {};
-    if (!(opts.body instanceof FormData))
-        headers["Content-Type"] = "application/json";
-    if (state.token) headers.Authorization = `Bearer ${state.token}`;
-    const res = await fetch(path, { ...opts, headers });
-    if (!res.ok) {
-        let msg = `HTTP ${res.status}`;
-        try {
-            const data = await res.json();
-            msg = data.detail || msg;
-        } catch (_) {}
-        throw new Error(msg);
-    }
-    return res.json();
-}
-
-function peerNameById(id) {
-    const m = state.membersById.get(id);
-    if (!m) return `#${id}`;
-    return `${m.nickname} @${m.username}`;
-}
-
-function withMediaToken(url) {
-    if (!url || !state.token) return url;
-    return `${url}${url.includes("?") ? "&" : "?"}token=${encodeURIComponent(state.token)}`;
-}
-
-function avatarMediaUrl(avatar) {
-    if (!avatar) return "";
-    const f = String(avatar);
-    return withMediaToken(
-        f.startsWith("/media/") ? f : `/media/${encodeURIComponent(f)}`,
-    );
-}
-
-function truncateText(text, limit = 96) {
-    const clean = String(text || "").trim();
-    if (!clean) return "";
-    return clean.length > limit
-        ? `${clean.slice(0, limit).trimEnd()}...`
-        : clean;
-}
-
-function toMultilineHtml(text) {
-    return escapeHtml(text || "").replace(/\n/g, "<br>");
-}
-
-function seedHue(seed) {
-    const source = String(seed || "lm");
-    let hash = 0;
-    for (let i = 0; i < source.length; i++)
-        hash = (hash * 31 + source.charCodeAt(i)) % 360;
-    return Math.abs(hash);
-}
-
-function initialsFromLabel(label) {
-    const clean = String(label || "").trim();
-    if (!clean) return "LM";
-    const parts = clean.split(/\s+/).filter(Boolean);
-    const letters = parts
-        .slice(0, 2)
-        .map((p) => p[0])
-        .join("");
-    return (letters || clean.slice(0, 2)).toUpperCase();
-}
-
-function avatarMarkup({ avatar, label, seed, className = "avatar-md" }) {
-    const classes = ["avatar", className].filter(Boolean).join(" ");
-    const title = escapeHtml(label || "LM");
-    const url = avatarMediaUrl(avatar);
-    if (url)
-        return `<img class="${classes}" src="${url}" alt="${title}" loading="lazy">`;
-    return `<div class="${classes}" style="--avatar-hue:${seedHue(seed || label || "lm")}">${escapeHtml(initialsFromLabel(label))}</div>`;
-}
-
-function roleBadge(role) {
-    if (role === "owner") return "👑 Владелец";
-    if (role === "admin") return "🛡️ Админ";
-    return "🙂 Участник";
-}
-
-function myGroupRole() {
-    return state.membersById.get(state.me?.id)?.role || "member";
-}
-
-function chatTitleText(chat) {
-    return chat ? chat.title || chat.peer?.nickname || "Чат" : "Выберите чат";
-}
-
-function chatMetaText(chat) {
-    if (!chat) return "Откройте диалог слева или создайте новую группу.";
-    if (chat.type === "group") {
-        const count = state.membersById.size || chat.member_count || 0;
-        return count ? `${count} участников` : "Групповой чат";
-    }
-    if (chat.peer?.username) return `@${chat.peer.username}`;
-    return "Личный чат";
-}
-
-function setComposerEnabled(enabled) {
-    const input = qs("messageInput");
-    if (input) {
-        input.disabled = !enabled;
-        input.placeholder = enabled
-            ? "Напишите сообщение..."
-            : "Выберите чат, чтобы начать переписку";
-    }
-    ["sendBtn", "btnAssets", "btnFile", "btnVoice", "btnCircle"].forEach(
-        (id) => {
-            const btn = qs(id);
-            if (btn) btn.disabled = !enabled;
-        },
-    );
-}
-
-function setEmptyState(showEmpty) {
-    const empty = qs("chatEmptyState");
-    const messages = qs("messages");
-    if (showEmpty) {
-        show(empty);
-        hide(messages);
-    } else {
-        hide(empty);
-        show(messages);
-    }
-    setComposerEnabled(!showEmpty);
-}
-
-function messageBody(m) {
-    const text = toMultilineHtml(m.text || "");
-    const parts = [];
-    if (text) parts.push(`<div class="message-text">${text}</div>`);
-    if (!m.file_url) return parts.join("");
-    const fileUrl = withMediaToken(m.file_url);
-    if (m.kind === "image" || m.kind === "sticker" || m.kind === "emoji") {
-        parts.push(
-            `<div style="position: relative; display: inline-block;"><img src="${fileUrl}" alt="${escapeHtml(m.file_name || "Вложение")}" loading="lazy"><a href="${fileUrl}" download="${escapeHtml(m.file_name || "image")}" style="position: absolute; bottom: 8px; right: 8px; background: rgba(0,0,0,0.7); color: white; padding: 8px 12px; border-radius: 8px; text-decoration: none; font-size: 13px;" title="Скачать">⬇️</a></div>`,
-        );
-        return parts.join("");
-    }
-    if (m.kind === "video" || m.kind === "circle") {
-        parts.push(
-            `<div style="position: relative; display: inline-block;"><video src="${fileUrl}" controls playsinline webkit-playsinline preload="metadata"></video><a href="${fileUrl}" download="${escapeHtml(m.file_name || "video")}" style="position: absolute; bottom: 8px; right: 8px; background: rgba(0,0,0,0.7); color: white; padding: 8px 12px; border-radius: 8px; text-decoration: none; font-size: 13px;" title="Скачать">⬇️</a></div>`,
-        );
-        return parts.join("");
-    }
-    if (m.kind === "voice") {
-        parts.push(
-            `<div style="display: flex; align-items: center; gap: 8px;"><audio src="${fileUrl}" controls preload="metadata"></audio><a href="${fileUrl}" download="${escapeHtml(m.file_name || "voice")}" style="background: rgba(94,168,255,0.2); color: var(--line-accent-strong); padding: 8px 12px; border-radius: 8px; text-decoration: none; font-size: 13px; white-space: nowrap;" title="Скачать">⬇️ Скачать</a></div>`,
-        );
-        return parts.join("");
-    }
-    return `${text ? `${text}<br>` : ""}<a href="${fileUrl}" target="_blank" download="${escapeHtml(m.file_name || "Файл")}">${escapeHtml(m.file_name || "Файл")} ⬇️</a>`;
-}
-
-function appendMessage(m) {
-    const mine = m.user_id === state.me?.id;
-    const isRead = mine && m.read_count > 0;
-    const item = document.createElement("div");
-    item.dataset.mid = String(m.id);
-    item.dataset.mine = mine ? "1" : "0";
-    item.className = `message ${mine ? "mine" : ""}`;
-    const statusHtml = mine
-        ? `<span class="msg-status ${isRead ? "read" : ""}" data-mid="${m.id}">${isRead ? "✓✓" : "✓"}</span>`
-        : "";
-    item.innerHTML = `
-        ${mine ? "" : avatarMarkup({ avatar: m.avatar, label: m.nickname, seed: `user-${m.user_id}`, className: "avatar-sm" })}
-        <div class="message-bubble">
-            <div class="message-meta">
-                <span class="message-author">${escapeHtml(m.nickname)}</span>
-                <span>@${escapeHtml(m.username)}</span>
-                <span>${formatTime(m.created_at)}</span>
-                ${statusHtml}
-            </div>
-            <div class="message-content">${messageBody(m)}</div>
-        </div>
-    `;
-    const messages = qs("messages");
-    if (messages) {
-        messages.appendChild(item);
-        messages.scrollTop = messages.scrollHeight;
-    }
-}
-
-function removeMessageById(messageId) {
-    qs("messages")?.querySelector(`[data-mid="${messageId}"]`)?.remove();
-}
-
-function renderProfileMini() {
-    if (!state.me) return;
-    const el = qs("profileMini");
-    if (!el) return;
-    const about = truncateText(state.me.about, 82);
-    el.innerHTML = `
-        <div class="profile-card">
-            ${avatarMarkup({ avatar: state.me.avatar, label: state.me.nickname, seed: `me-${state.me.id}`, className: "avatar-lg" })}
-            <div class="profile-card-copy">
-                <strong>${escapeHtml(state.me.nickname)}</strong>
-                <span>@${escapeHtml(state.me.username)}</span>
-                ${about ? `<p>${escapeHtml(about)}</p>` : ""}
-            </div>
-            <div class="profile-id">#${state.me.id}</div>
-        </div>
-    `;
-}
-
-function renderChatList(filter = "") {
-    const q = filter.trim().toLowerCase();
-    const list = qs("chatList");
-    if (!list) return;
-    list.innerHTML = "";
-    state.chats
-        .filter((c) => {
-            const h = [c.title, c.peer?.nickname, c.peer?.username, c.last_text]
-                .filter(Boolean)
-                .join(" ")
-                .toLowerCase();
-            return !q || h.includes(q);
-        })
-        .forEach((chat) => {
-            const title = chatTitleText(chat);
-            const preview = truncateText(
-                chat.last_text ||
-                    (chat.type === "group"
-                        ? "Групповой чат"
-                        : "Начните новый диалог"),
-                88,
-            );
-            const subtitle =
-                chat.type === "group"
-                    ? "Группа"
-                    : chat.peer?.username
-                      ? `@${chat.peer.username}`
-                      : "Личный чат";
-            const el = document.createElement("div");
-            el.className = `item ${chat.id === state.currentChatId ? "selected" : ""}`;
-            el.innerHTML = `
-                <div class="item-head">
-                    ${avatarMarkup({ avatar: chat.peer?.avatar, label: title, seed: `chat-${chat.id}-${title}`, className: "avatar-md" })}
-                    <div class="item-copy">
-                        <div class="item-title-row">
-                            <b>${escapeHtml(title)}</b>
-                            <span class="item-time">${escapeHtml(formatListTime(chat.last_at) || "")}</span>
-                        </div>
-                        <small>${escapeHtml(subtitle)}</small>
-                        <p class="item-preview">${escapeHtml(preview)}</p>
-                    </div>
-                </div>
-                <div class="item-tags"><span class="item-tag">${chat.type === "group" ? "Group" : "DM"}</span></div>
-            `;
-            el.onclick = () => openChat(chat.id);
-            list.appendChild(el);
-        });
-}
-
-function setChatHeader(chat) {
-    const titleEl = qs("chatTitle");
-    const titleText = chatTitleText(chat);
-    const metaEl = qs("chatMeta");
-    const avatarEl = qs("chatAvatar");
-    const canCall = !!chat && !!chat.can_call;
-    const group = !!chat && chat.type === "group";
-    const canDelete = !!chat && chat.type === "group" && !!chat.can_delete;
-    const stack = document.querySelector(".chat-stack");
-    const btnCall = qs("btnCallStart");
-    const btnInvite = qs("btnInviteGroup");
-    const btnLeave = qs("btnLeaveChat");
-    const btnDelete = qs("btnDeleteGroup");
-    const membersPanel = qs("groupMembersPanel");
-    const btnShowMembers = qs("btnShowMembers");
-    const btnGroupAvatar = qs("btnGroupAvatar");
-
-    if (titleEl) titleEl.textContent = titleText;
-    if (metaEl) metaEl.textContent = chatMetaText(chat);
-    if (avatarEl)
-        avatarEl.innerHTML = avatarMarkup({
-            avatar: chat?.avatar || chat?.peer?.avatar,
-            label: titleText,
-            seed: chat ? `chat-${chat.id}-${titleText}` : "empty-chat",
-            className: "avatar-xl avatar-placeholder",
-        });
-    if (!chat) state.membersById = new Map();
-
-    if (canCall) show(btnCall);
-    else hide(btnCall);
-    if (group) show(btnInvite);
-    else hide(btnInvite);
-    if (group) show(btnShowMembers);
-    else hide(btnShowMembers);
-    // Показываем кнопку смены аватарки только для owner/admin
-    const myRole = myGroupRole();
-    if (group && btnGroupAvatar && (myRole === "owner" || myRole === "admin")) {
-        show(btnGroupAvatar);
-    } else if (btnGroupAvatar) {
-        hide(btnGroupAvatar);
-    }
-    if (btnInvite)
-        btnInvite.title = group ? "Пригласить по username" : "Пригласить";
-    if (chat) show(btnLeave);
-    else hide(btnLeave);
-    if (btnLeave) {
-        btnLeave.textContent = "🚪";
-        btnLeave.title = group ? "Выйти из группы" : "Выйти из чата";
-    }
-    if (canDelete) show(btnDelete);
-    else hide(btnDelete);
-    if (btnDelete) {
-        btnDelete.textContent = "🗑️";
-        btnDelete.title = "Удалить группу";
-    }
-    if (group) show(membersPanel);
-    else hide(membersPanel);
-    if (!group) closeMembersSheet();
-    if (stack) stack.classList.toggle("has-members", group);
-    setEmptyState(!chat);
-}
-
-async function loadMembers(chatId) {
-    if (!chatId) return;
-    const members = await api(`/api/chats/${chatId}/members`);
-    state.membersById = new Map(members.map((m) => [m.id, m]));
-    const wrap = qs("chatMembers");
-    if (!wrap) return;
-    wrap.innerHTML = "";
-    const currentRole = myGroupRole();
-    members.forEach((m) => {
-        const el = document.createElement("div");
-        el.className = "item";
-        el.innerHTML = `
-            <div class="item-head">
-                ${avatarMarkup({ avatar: m.avatar, label: m.nickname, seed: `member-${m.id}`, className: "avatar-sm" })}
-                <div class="item-copy">
-                    <div class="item-title-row">
-                        <b>${escapeHtml(m.nickname)}</b>
-                        <span class="item-tag">${escapeHtml(roleBadge(m.role))}</span>
-                    </div>
-                    <small>@${escapeHtml(m.username)} #${m.id}</small>
-                </div>
-            </div>
-        `;
-        const actions = document.createElement("div");
-        actions.className = "actions";
-        if (m.id !== state.me.id) {
-            const dm = document.createElement("button");
-            dm.textContent = "💬";
-            dm.title = "Личный чат";
-            dm.onclick = async () => {
-                const out = await api("/api/chats/direct", {
-                    method: "POST",
-                    body: JSON.stringify({ user_id: m.id }),
-                });
-                await loadChats();
-                await openChat(out.chat_id);
-            };
-            const call = document.createElement("button");
-            call.textContent = "📞";
-            call.title = "Позвонить";
-            call.onclick = async () => {
-                const out = await api("/api/chats/direct", {
-                    method: "POST",
-                    body: JSON.stringify({ user_id: m.id }),
-                });
-                await loadChats();
-                await openChat(out.chat_id);
-                await startCall();
-            };
-            actions.appendChild(dm);
-            actions.appendChild(call);
-        }
-        if (currentRole === "owner" && m.id !== state.me.id) {
-            const promote = document.createElement("button");
-            promote.className = "ghost";
-            promote.textContent = m.role === "admin" ? "🙂" : "🛡️";
-            promote.title =
-                m.role === "admin" ? "Сделать участником" : "Выдать админку";
-            promote.onclick = async () => {
-                try {
-                    await api(`/api/groups/${chatId}/members/${m.id}/role`, {
-                        method: "POST",
-                        body: JSON.stringify({
-                            role: m.role === "admin" ? "member" : "admin",
-                        }),
-                    });
-                    await Promise.all([loadMembers(chatId), loadChats()]);
-                } catch (e) {
-                    alert(e.message);
-                }
-            };
-            const transfer = document.createElement("button");
-            transfer.className = "ghost";
-            transfer.textContent = "👑";
-            transfer.title = "Передать owner";
-            transfer.onclick = async () => {
-                if (
-                    !confirm(`Передать роль owner пользователю @${m.username}?`)
-                )
-                    return;
-                try {
-                    await api(`/api/groups/${chatId}/members/${m.id}/role`, {
-                        method: "POST",
-                        body: JSON.stringify({ role: "owner" }),
-                    });
-                    await Promise.all([loadMembers(chatId), loadChats()]);
-                } catch (e) {
-                    alert(e.message);
-                }
-            };
-            actions.appendChild(promote);
-            actions.appendChild(transfer);
-        }
-        if (
-            (currentRole === "owner" && m.id !== state.me.id) ||
-            (currentRole === "admin" &&
-                m.role === "member" &&
-                m.id !== state.me.id)
-        ) {
-            const kick = document.createElement("button");
-            kick.className = "danger";
-            kick.textContent = "⛔";
-            kick.title = "Исключить из группы";
-            kick.onclick = async () => {
-                if (!confirm(`Исключить @${m.username} из группы?`)) return;
-                try {
-                    await api(`/api/groups/${chatId}/members/${m.id}`, {
-                        method: "DELETE",
-                    });
-                    await Promise.all([loadMembers(chatId), loadChats()]);
-                } catch (e) {
-                    alert(e.message);
-                }
-            };
-            actions.appendChild(kick);
-        }
-        el.appendChild(actions);
-        wrap.appendChild(el);
-    });
-    if (state.currentChatId === chatId) setChatHeader(state.currentChat);
-}
-
-async function openChat(chatId) {
-    const chat = state.chats.find((c) => c.id === chatId) || null;
-    state.currentChat = chat;
-    state.currentChatId = chatId;
-    state.membersById = new Map();
-    setChatHeader(chat);
-    setChatOpen(true);
-    if (window.innerWidth <= 980) document.body.classList.remove("menu-open");
-    const messages = qs("messages");
-    if (messages) messages.innerHTML = "";
-    const data = await api(`/api/chats/${chatId}/messages`);
-    data.forEach(appendMessage);
-    await markChatRead(chatId);
-    if (chat && chat.type === "group") await loadMembers(chatId);
-    else state.membersById = new Map();
-}
-
-async function loadChats() {
-    state.chats = await api("/api/chats");
-    renderChatList(qs("chatSearch")?.value || "");
-    if (state.currentChatId) {
-        const still = state.chats.find((c) => c.id === state.currentChatId);
-        if (!still) {
-            state.currentChat = null;
-            state.currentChatId = null;
-            setChatHeader(null);
-            setChatOpen(false);
-            const msgEl = qs("messages");
-            const memEl = qs("chatMembers");
-            if (msgEl) msgEl.innerHTML = "";
-            if (memEl) memEl.innerHTML = "";
-        } else {
-            state.currentChat = still;
-            setChatHeader(still);
-        }
-    }
-}
-
-async function loadFriends() {
-    state.friends = await api("/api/friends");
-    const list = qs("friendsList");
-    if (!list) return;
-    list.innerHTML = "";
-    state.friends.forEach((f) => {
-        const el = document.createElement("div");
-        el.className = "item";
-        el.innerHTML = `
-            <div class="item-head">
-                ${avatarMarkup({ avatar: f.avatar, label: f.nickname, seed: `friend-${f.id}`, className: "avatar-md" })}
-                <div class="item-copy">
-                    <div class="item-title-row"><b>${escapeHtml(f.nickname)}</b><span class="item-tag">Friend</span></div>
-                    <small>@${escapeHtml(f.username)} #${f.id}</small>
-                    ${f.about ? `<p class="item-preview">${escapeHtml(truncateText(f.about, 90))}</p>` : ""}
-                </div>
-            </div>
-        `;
-        const actions = document.createElement("div");
-        actions.className = "actions";
-        const dm = document.createElement("button");
-        dm.textContent = "Чат";
-        dm.onclick = async () => {
-            const out = await api("/api/chats/direct", {
-                method: "POST",
-                body: JSON.stringify({ user_id: f.id }),
-            });
-            await loadChats();
-            await openChat(out.chat_id);
-        };
-        const block = document.createElement("button");
-        block.className = "danger";
-        block.textContent = "Блок";
-        block.onclick = async () => {
-            await api(`/api/users/${f.id}/block`, {
-                method: "POST",
-                body: "{}",
-            });
-            await refreshSide();
-        };
-        actions.appendChild(dm);
-        actions.appendChild(block);
-        el.appendChild(actions);
-        list.appendChild(el);
-    });
-}
-
-async function loadFriendRequests() {
-    const rows = await api("/api/friends/requests");
-    const list = qs("friendRequests");
-    if (!list) return;
-    list.innerHTML = "";
-    rows.forEach((r) => {
-        const el = document.createElement("div");
-        el.className = "item";
-        el.innerHTML = `
-            <div class="item-head">
-                ${avatarMarkup({ avatar: r.avatar, label: r.nickname, seed: `request-${r.user_id || r.id}`, className: "avatar-md" })}
-                <div class="item-copy">
-                    <b>${escapeHtml(r.nickname)}</b>
-                    <small>@${escapeHtml(r.username)}</small>
-                    <p class="item-preview">Хочет добавить вас в друзья.</p>
-                </div>
-            </div>
-        `;
-        const actions = document.createElement("div");
-        actions.className = "actions";
-        const yes = document.createElement("button");
-        yes.textContent = "Принять";
-        yes.onclick = async () => {
-            await api(`/api/friends/request/${r.id}/accept`, {
-                method: "POST",
-                body: "{}",
-            });
-            await refreshSide();
-        };
-        const no = document.createElement("button");
-        no.className = "danger";
-        no.textContent = "Отклонить";
-        no.onclick = async () => {
-            await api(`/api/friends/request/${r.id}/reject`, {
-                method: "POST",
-                body: "{}",
-            });
-            await refreshSide();
-        };
-        actions.appendChild(yes);
-        actions.appendChild(no);
-        el.appendChild(actions);
-        list.appendChild(el);
-    });
-}
-
-async function loadGroupInvites() {
-    const rows = await api("/api/groups/invites");
-    const list = qs("groupInvites");
-    if (!list) return;
-    list.innerHTML = "";
-    rows.forEach((r) => {
-        const el = document.createElement("div");
-        el.className = "item";
-        el.innerHTML = `
-            <div class="item-head">
-                ${avatarMarkup({ label: r.chat_title || "Группа", seed: `invite-${r.chat_id || r.id}`, className: "avatar-md" })}
-                <div class="item-copy">
-                    <b>${escapeHtml(r.chat_title || "Группа")}</b>
-                    <small>от ${escapeHtml(r.inviter_nickname)} @${escapeHtml(r.inviter_username)}</small>
-                    <p class="item-preview">Вас приглашают в групповой чат.</p>
-                </div>
-            </div>
-        `;
-        const actions = document.createElement("div");
-        actions.className = "actions";
-        const yes = document.createElement("button");
-        yes.textContent = "Принять";
-        yes.onclick = async () => {
-            await api(`/api/groups/invites/${r.id}/accept`, {
-                method: "POST",
-                body: "{}",
-            });
-            await Promise.all([loadGroupInvites(), loadChats()]);
-        };
-        const no = document.createElement("button");
-        no.className = "danger";
-        no.textContent = "Отклонить";
-        no.onclick = async () => {
-            await api(`/api/groups/invites/${r.id}/reject`, {
-                method: "POST",
-                body: "{}",
-            });
-            await loadGroupInvites();
-        };
-        actions.appendChild(yes);
-        actions.appendChild(no);
-        el.appendChild(actions);
-        list.appendChild(el);
-    });
-}
-
-async function loadBlockedList() {
-    const rows = await api("/api/blocks");
-    const list = qs("blockedList");
-    if (!list) return;
-    list.innerHTML = "";
-    rows.forEach((u) => {
-        const el = document.createElement("div");
-        el.className = "item";
-        el.innerHTML = `
-            <div class="item-head">
-                ${avatarMarkup({ avatar: u.avatar, label: u.nickname, seed: `blocked-${u.id}`, className: "avatar-sm" })}
-                <div class="item-copy"><b>${escapeHtml(u.nickname)}</b><small>@${escapeHtml(u.username)} #${u.id}</small></div>
-            </div>
-        `;
-        const actions = document.createElement("div");
-        actions.className = "actions";
-        const un = document.createElement("button");
-        un.textContent = "Разблокировать";
-        un.onclick = async () => {
-            await api(`/api/users/${u.id}/block`, { method: "DELETE" });
-            await loadBlockedList();
-            await refreshSide();
-        };
-        actions.appendChild(un);
-        el.appendChild(actions);
-        list.appendChild(el);
-    });
-}
-
-async function markChatRead(chatId) {
-    try {
-        await api(`/api/chats/${chatId}/read`, { method: "POST", body: "{}" });
-    } catch (_) {}
-}
-
-function updateReadStatusUpTo(upToId) {
-    const messages = qs("messages");
-    if (!messages) return;
-    messages.querySelectorAll(".msg-status[data-mid]").forEach((el) => {
-        if (Number(el.dataset.mid) <= upToId) {
-            el.textContent = "✓✓";
-            el.classList.add("read");
-        }
-    });
-}
-
-async function refreshSide() {
-    await Promise.all([
-        loadFriends(),
-        loadFriendRequests(),
-        loadGroupInvites(),
-        loadChats(),
-    ]);
-}
-
-async function sendMessage({ text = "", file = null, kind = "text" }) {
-    if (!state.currentChatId) return;
-    const form = new FormData();
-    form.append("text", text);
-    form.append("kind", kind);
-    if (file) form.append("file", file, file.name || "upload.bin");
-    await api(`/api/chats/${state.currentChatId}/messages`, {
-        method: "POST",
-        body: form,
-        headers: {},
-    });
-    const input = qs("messageInput");
-    if (input) input.value = "";
-}
-
-async function sendAssetMessage(assetId) {
-    if (!state.currentChatId) return;
-    const form = new FormData();
-    form.append("asset_id", String(assetId));
-    await api(`/api/chats/${state.currentChatId}/messages/asset`, {
-        method: "POST",
-        body: form,
-        headers: {},
-    });
-}
-
-async function loadAssets() {
-    state.assets = await api("/api/assets");
-    const list = qs("assetsList");
-    if (!list) return;
-    list.innerHTML = "";
-    state.assets.forEach((a) => {
-        const preview =
-            a.kind === "emoji" || a.kind === "sticker"
-                ? `<img class="avatar avatar-md" src="${withMediaToken(a.file_url)}" alt="${escapeHtml(a.title || a.kind)}" loading="lazy">`
-                : avatarMarkup({
-                      label: a.kind,
-                      seed: `asset-${a.id}`,
-                      className: "avatar-md",
-                  });
-        const el = document.createElement("div");
-        el.className = "item";
-        el.innerHTML = `
-            <div class="item-head">
-                ${preview}
-                <div class="item-copy">
-                    <div class="item-title-row"><b>${escapeHtml(a.title || a.kind)}</b><span class="item-tag">${escapeHtml(a.kind)}</span></div>
-                    <small>Персональный набор</small>
-                </div>
-            </div>
-        `;
-        const actions = document.createElement("div");
-        actions.className = "actions";
-        const send = document.createElement("button");
-        send.textContent = "Отправить";
-        send.onclick = async () => {
-            await sendAssetMessage(a.id);
-            qs("assetsDialog")?.close();
-        };
-        const del = document.createElement("button");
-        del.className = "danger";
-        del.textContent = "Удалить";
-        del.onclick = async () => {
-            await api(`/api/assets/${a.id}`, { method: "DELETE" });
-            await loadAssets();
-        };
-        actions.appendChild(send);
-        actions.appendChild(del);
-        el.appendChild(actions);
-        list.appendChild(el);
-    });
-}
-
-async function startVoiceRecord() {
-    if (state.mediaRecorder) {
-        state.mediaRecorder.stop();
-        return;
-    }
-    try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-            audio: true,
-        });
-        const chunks = [];
-        const mimeType = pickRecorderMime("audio");
-        const rec = mimeType
-            ? new MediaRecorder(stream, { mimeType })
-            : new MediaRecorder(stream);
-        state.mediaRecorder = rec;
-        const btn = qs("btnVoice");
-        if (btn) btn.textContent = "Стоп";
-        rec.ondataavailable = (e) => chunks.push(e.data);
-        rec.onstop = async () => {
-            const outMime = rec.mimeType || mimeType || "audio/webm";
-            const ext = extForMime(outMime, "webm");
-            const blob = new Blob(chunks, { type: outMime });
-            const file = new File([blob], `voice_${Date.now()}.${ext}`, {
-                type: outMime,
-            });
-            await sendMessage({ file, kind: "voice" });
-            stream.getTracks().forEach((t) => t.stop());
-            state.mediaRecorder = null;
-            if (btn) btn.textContent = "Голос";
-        };
-        rec.start();
-    } catch (e) {
-        alert("Ошибка доступа к микрофону: " + e.message);
-    }
-}
-
-async function startCircleRecord() {
-    if (state.circleRecorder) {
-        state.circleRecorder.stop();
-        return;
-    }
-    try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-            video: true,
-            audio: true,
-        });
-        const chunks = [];
-        const mimeType = pickRecorderMime("video");
-        const rec = mimeType
-            ? new MediaRecorder(stream, { mimeType })
-            : new MediaRecorder(stream);
-        state.circleRecorder = rec;
-        const btn = qs("btnCircle");
-        if (btn) btn.textContent = "Стоп";
-        rec.ondataavailable = (e) => chunks.push(e.data);
-        rec.onstop = async () => {
-            const outMime = rec.mimeType || mimeType || "video/webm";
-            const ext = extForMime(outMime, "webm");
-            const blob = new Blob(chunks, { type: outMime });
-            const file = new File([blob], `circle_${Date.now()}.${ext}`, {
-                type: outMime,
-            });
-            await sendMessage({ file, kind: "circle" });
-            stream.getTracks().forEach((t) => t.stop());
-            state.circleRecorder = null;
-            if (btn) btn.textContent = "Кружок";
-        };
-        rec.start();
-    } catch (e) {
-        alert("Ошибка доступа к камере: " + e.message);
-    }
-}
-
-// =============================================================================
-// === ЛОГИКА ЗВОНКОВ ===
-// =============================================================================
-
-function getDefaultIceServers() {
-    return [
-        { urls: "stun:stun.l.google.com:19302" },
-        { urls: "stun:stun1.l.google.com:19302" },
-    ];
-}
-
-async function fetchIceServers() {
-    try {
-        const cfg = await api("/api/rtc-config");
-        return cfg.ice_servers && cfg.ice_servers.length
-            ? cfg.ice_servers
-            : getDefaultIceServers();
-    } catch {
-        return getDefaultIceServers();
-    }
-}
-
-// ─── Воспроизведение медиа ────────────────────────────────────────────────────
-// forceMuted=true  → <video> без звука (звук идёт через отдельный <audio>)
-// forceMuted=false → <audio> удалённого участника (нужен звук)
-async function safePlayMedia(mediaEl, forceMuted = false) {
-    if (!mediaEl) return;
-    mediaEl.playsInline = true;
-    mediaEl.autoplay = true;
-
-    if (forceMuted) {
-        mediaEl.muted = true;
-        try {
-            await mediaEl.play();
-        } catch {}
-        return;
-    }
-
-    // Пробуем сразу со звуком
-    mediaEl.muted = false;
-    try {
-        await mediaEl.play();
-        return;
-    } catch {}
-
-    // Fallback: muted → play → unmute (Safari)
-    mediaEl.muted = true;
-    try {
-        await mediaEl.play();
-        setTimeout(() => {
-            mediaEl.muted = false;
-        }, 300);
-    } catch (e) {
-        console.warn("safePlayMedia failed:", e);
-    }
-}
-
-// ─── Tile участника ───────────────────────────────────────────────────────────
-function createCallTile(userId, isLocal) {
-    const grid = qs("callGrid");
-    if (!grid) return null;
-
-    // Удаляем дубли
-    grid.querySelector(`[data-uid="${userId}"]`)?.remove();
-
-    const tile = document.createElement("div");
-    tile.className = `call-tile ${isLocal ? "local" : "remote"}`;
-    tile.dataset.uid = String(userId);
-
-    // <video> — ВСЕГДА muted, картинка без звука
-    const video = document.createElement("video");
-    video.autoplay = true;
-    video.playsInline = true;
-    video.setAttribute("playsinline", "");
-    video.setAttribute("webkit-playsinline", "");
-    video.muted = true;
-    if (isLocal) video.style.transform = "scaleX(-1)";
-
-    // <audio> — только звук, для удалённых участников
-    const audio = document.createElement("audio");
-    audio.autoplay = true;
-    audio.muted = isLocal; // себя не слышим
-
-    const who = document.createElement("div");
-    who.className = "who";
-    const nameSpan = document.createElement("span");
-    nameSpan.textContent = isLocal ? "Вы" : peerNameById(userId);
-    const stateSpan = document.createElement("span");
-    stateSpan.className = "tile-state";
-    stateSpan.textContent = "🎤";
-    who.appendChild(nameSpan);
-    who.appendChild(stateSpan);
-
-    tile.appendChild(video);
-    tile.appendChild(audio);
-    tile.appendChild(who);
-    grid.appendChild(tile);
-
-    return { tile, video, audio, who, stateSpan };
-}
-
-// ─── Привязка удалённого потока к tile ───────────────────────────────────────
-function attachRemoteStream(userId, stream) {
-    let card = state.call.tiles.get(userId);
-    if (!card) {
-        card = createCallTile(userId, false);
-        if (!card) return;
-        state.call.tiles.set(userId, card);
-    }
-
-    state.call.remoteStreams.set(userId, stream);
-
-    const videoTracks = stream.getVideoTracks();
-    if (videoTracks.length > 0) {
-        card.video.srcObject = new MediaStream(videoTracks);
-        safePlayMedia(card.video, true); // видео без звука
-    }
-
-    const audioTracks = stream.getAudioTracks();
-    if (audioTracks.length > 0) {
-        card.audio.srcObject = new MediaStream(audioTracks);
-        safePlayMedia(card.audio, false); // аудио со звуком
-    }
-
-    // Реагируем на новые треки (включилась камера)
-    stream.onaddtrack = () => attachRemoteStream(userId, stream);
-}
-
-// ─── Построение RTCPeerConnection ─────────────────────────────────────────────
-function buildPeerConnection(userId) {
-    const pc = new RTCPeerConnection({
-        iceServers: state.call.iceServers || getDefaultIceServers(),
-        iceCandidatePoolSize: 4,
-        bundlePolicy: "max-bundle",
-        rtcpMuxPolicy: "require",
-    });
-
-    pc._userId = userId;
-    pc._makingOffer = false;
-
-    // Добавляем свои треки
-    if (state.call.localStream) {
-        state.call.localStream
-            .getTracks()
-            .forEach((t) => pc.addTrack(t, state.call.localStream));
-    }
-
-    pc.onicecandidate = ({ candidate }) => {
-        if (candidate) sendCallSignal(userId, { type: "candidate", candidate });
-    };
-
-    pc.ontrack = ({ streams, track }) => {
-        let stream = streams?.[0];
-        if (!stream) {
-            stream = state.call.remoteStreams.get(userId) || new MediaStream();
-            stream.addTrack(track);
-            state.call.remoteStreams.set(userId, stream);
-        }
-        attachRemoteStream(userId, stream);
-    };
-
-    pc.onconnectionstatechange = () => {
-        console.log(`Peer ${userId}: ${pc.connectionState}`);
-        const card = state.call.tiles.get(userId);
-        if (card)
-            card.tile.style.opacity =
-                pc.connectionState === "connected" ? "1" : "0.6";
-        if (pc.connectionState === "failed") pc.restartIce();
-    };
-
-    pc.oniceconnectionstatechange = () => {
-        if (pc.iceConnectionState === "failed") pc.restartIce();
-    };
-
-    // КРИТИЧНО: переговоры при динамическом добавлении треков (включили камеру)
-    pc.onnegotiationneeded = async () => {
-        if (!state.call.active || pc._makingOffer) return;
-        try {
-            pc._makingOffer = true;
-            const offer = await pc.createOffer({
-                offerToReceiveAudio: true,
-                offerToReceiveVideo: true,
-            });
-            if (pc.signalingState !== "stable") return;
-            await pc.setLocalDescription(offer);
-            sendCallSignal(userId, { type: "offer", sdp: pc.localDescription });
-        } catch (e) {
-            console.error("onnegotiationneeded error:", e);
-        } finally {
-            pc._makingOffer = false;
-        }
-    };
-
-    state.call.peers.set(userId, pc);
-    return pc;
-}
-
-// Создаёт PC и отправляет первый offer
-async function createOfferPeer(userId) {
-    userId = Number(userId);
-    if (state.call.peers.has(userId)) return state.call.peers.get(userId);
-
-    const pc = buildPeerConnection(userId);
-    pc._makingOffer = true;
-    try {
-        const offer = await pc.createOffer({
-            offerToReceiveAudio: true,
-            offerToReceiveVideo: true,
-        });
-        await pc.setLocalDescription(offer);
-        sendCallSignal(userId, { type: "offer", sdp: pc.localDescription });
-    } catch (e) {
-        console.error("createOfferPeer failed:", e);
-    } finally {
-        pc._makingOffer = false;
-    }
-    return pc;
-}
-
-// ─── Буфер ICE кандидатов ─────────────────────────────────────────────────────
-async function flushCandidates(userId, pc) {
-    const buffered = state.call.pendingCandidates.get(userId) || [];
-    state.call.pendingCandidates.delete(userId);
-    for (const c of buffered) {
-        try {
-            await pc.addIceCandidate(new RTCIceCandidate(c));
-        } catch {}
-    }
-}
-
-// ─── Обработка входящих сигналов ─────────────────────────────────────────────
-async function handleCallSignal(fromUserId, signal) {
-    if (!state.call.active) return;
-    fromUserId = Number(fromUserId);
-
-    // Вежливый = у кого ID больше (отступает при столкновении offer)
-    const polite = state.me.id > fromUserId;
-
-    try {
-        if (signal.type === "offer") {
-            let pc = state.call.peers.get(fromUserId);
-            if (!pc) pc = buildPeerConnection(fromUserId);
-
-            const collision = pc._makingOffer || pc.signalingState !== "stable";
-            if (collision) {
-                if (!polite) return;
-                await pc.setLocalDescription({ type: "rollback" });
-            }
-
-            await pc.setRemoteDescription(
-                new RTCSessionDescription(signal.sdp),
-            );
-            const answer = await pc.createAnswer();
-            await pc.setLocalDescription(answer);
-            sendCallSignal(fromUserId, {
-                type: "answer",
-                sdp: pc.localDescription,
-            });
-            await flushCandidates(fromUserId, pc);
-        } else if (signal.type === "answer") {
-            const pc = state.call.peers.get(fromUserId);
-            if (!pc || pc.signalingState !== "have-local-offer") return;
-            await pc.setRemoteDescription(
-                new RTCSessionDescription(signal.sdp),
-            );
-            await flushCandidates(fromUserId, pc);
-        } else if (signal.type === "candidate") {
-            const pc = state.call.peers.get(fromUserId);
-            if (!pc || !pc.remoteDescription) {
-                if (!state.call.pendingCandidates.has(fromUserId)) {
-                    state.call.pendingCandidates.set(fromUserId, []);
-                }
-                state.call.pendingCandidates
-                    .get(fromUserId)
-                    .push(signal.candidate);
-            } else {
-                await pc.addIceCandidate(new RTCIceCandidate(signal.candidate));
-            }
-        }
-    } catch (e) {
-        console.error("handleCallSignal error:", e);
-    }
-}
-
-function sendCallSignal(toUserId, signal) {
-    if (!state.ws || state.ws.readyState !== WebSocket.OPEN) return;
-    state.ws.send(
-        JSON.stringify({
-            type: "call:signal",
-            chat_id: state.call.chatId,
-            to_user: toUserId,
-            signal,
-        }),
-    );
-}
-
-// ─── Удаление участника ───────────────────────────────────────────────────────
-function removePeer(userId) {
-    userId = Number(userId);
-    const pc = state.call.peers.get(userId);
-    if (pc) {
-        pc.close();
-        state.call.peers.delete(userId);
-    }
-    const card = state.call.tiles.get(userId);
-    if (card) {
-        card.tile.remove();
-        state.call.tiles.delete(userId);
-    }
-    state.call.remoteStreams.delete(userId);
-    state.call.pendingCandidates.delete(userId);
-}
-
-// ─── Управление звонком ───────────────────────────────────────────────────────
-
-async function startCall() {
-    if (!state.currentChat || state.call.active) return;
-    await unlockAudioContext();
-
-    if (!state.ws || state.ws.readyState !== WebSocket.OPEN) {
-        alert("Нет соединения. Попробуйте ещё раз.");
-        return;
-    }
-
-    state.call.iceServers = await fetchIceServers();
-
-    try {
-        const audioStream = await navigator.mediaDevices.getUserMedia({
-            audio: {
-                echoCancellation: true,
-                noiseSuppression: true,
-                autoGainControl: true,
-            },
-            video: false,
-        });
-        state.call.localStream = new MediaStream();
-        audioStream
-            .getAudioTracks()
-            .forEach((t) => state.call.localStream.addTrack(t));
-    } catch (e) {
-        alert("Нет доступа к микрофону: " + e.message);
-        return;
-    }
-
-    state.call.active = true;
-    state.call.chatId = state.currentChatId;
-    state.call.startedAt = Date.now();
-    state.call.mic = true;
-    state.call.cam = false;
-    state.call.screen = false;
-
-    const grid = qs("callGrid");
-    if (grid) grid.innerHTML = "";
-    state.call.peers.clear();
-    state.call.tiles.clear();
-    state.call.remoteStreams.clear();
-    state.call.pendingCandidates.clear();
-
-    const localCard = createCallTile(state.me?.id, true);
-    if (localCard) {
-        localCard.video.srcObject = new MediaStream(
-            state.call.localStream.getTracks(),
-        );
-        safePlayMedia(localCard.video, true);
-        state.call.tiles.set(state.me?.id, localCard);
-    }
-
-    const titleEl = qs("callTitleLabel");
-    if (titleEl)
-        titleEl.textContent = `Звонок: ${state.currentChat.title || state.currentChat.peer?.nickname || "чат"}`;
-
-    show(qs("callOverlay"));
-    hide(qs("btnCallRestore"));
-    updateCallButtons();
-    startCallTimer();
-
-    state.ws.send(
-        JSON.stringify({
-            type: "call:join",
-            chat_id: state.call.chatId,
-            mic: true,
-            cam: false,
-            screen: false,
-        }),
-    );
-}
-
-function leaveCall() {
-    if (!state.call.active) return;
-
-    // Сохраняем chatId ДО очистки состояния
-    const chatId = state.call.chatId;
-
-    state.call.localStream?.getTracks().forEach((t) => t.stop());
-    state.call.peers.forEach((pc) => pc.close());
-    state.call.peers.clear();
-    state.call.tiles.clear();
-    state.call.remoteStreams.clear();
-    state.call.pendingCandidates.clear();
-    state.call.localStream = null;
-    state.call.active = false;
-    state.call.chatId = null;
-    state.call.cam = false;
-    state.call.screen = false;
-    state.call.mic = true;
-
-    stopCallTimer();
-
-    // Отправляем с сохранённым chatId
-    if (state.ws?.readyState === WebSocket.OPEN) {
-        state.ws.send(JSON.stringify({ type: "call:leave", chat_id: chatId }));
-    }
-
-    hide(qs("callOverlay"));
-    hide(qs("btnCallRestore"));
-    const grid = qs("callGrid");
-    if (grid) grid.innerHTML = "";
-    updateCallButtons();
-    state.ui.callMinimized = false;
-}
-
-async function toggleMic() {
-    if (!state.call.active) return;
-    state.call.mic = !state.call.mic;
-    state.call.localStream?.getAudioTracks().forEach((t) => {
-        t.enabled = state.call.mic;
-    });
-    updateLocalTileState();
-    broadcastCallState();
-    updateCallButtons();
-}
-
-async function toggleCam() {
-    if (!state.call.active) return;
-
-    const existing = state.call.localStream?.getVideoTracks()[0];
-
-    if (existing) {
-        // Выключаем камеру
-        existing.stop();
-        state.call.localStream.removeTrack(existing);
-        state.call.cam = false;
-        state.call.screen = false;
-
-        for (const pc of state.call.peers.values()) {
-            const sender = pc
-                .getSenders()
-                .find((s) => s.track?.kind === "video");
-            if (sender) await sender.replaceTrack(null);
-        }
-    } else {
-        // Включаем камеру
-        try {
-            const constraints = isMobile
-                ? {
-                      video: {
-                          facingMode: { ideal: state.devicePrefs.camFacing },
-                      },
-                  }
-                : { video: { width: { ideal: 1280 }, height: { ideal: 720 } } };
-            const stream =
-                await navigator.mediaDevices.getUserMedia(constraints);
-            const track = stream.getVideoTracks()[0];
-            state.call.localStream.addTrack(track);
-            state.call.cam = true;
-            state.call.screen = false;
-
-            for (const pc of state.call.peers.values()) {
-                const sender = pc
-                    .getSenders()
-                    .find((s) => s.track?.kind === "video");
-                if (sender) {
-                    await sender.replaceTrack(track);
-                } else {
-                    // addTrack → onnegotiationneeded → автоматические переговоры
-                    pc.addTrack(track, state.call.localStream);
-                }
-            }
-        } catch (e) {
-            alert("Нет доступа к камере: " + e.message);
-            return;
-        }
-    }
-
-    const localCard = state.call.tiles.get(state.me?.id);
-    if (localCard) {
-        const vtracks = state.call.localStream?.getVideoTracks() || [];
-        if (vtracks.length) {
-            localCard.video.srcObject = new MediaStream(vtracks);
-            safePlayMedia(localCard.video, true);
-        } else {
-            localCard.video.srcObject = null;
-        }
-    }
-
-    updateLocalTileState();
-    broadcastCallState();
-    updateCallButtons();
-}
-
-async function toggleScreenShare() {
-    if (!state.call.active) return;
-    if (isMobile || !navigator.mediaDevices?.getDisplayMedia) {
-        alert("Демонстрация экрана недоступна на мобильных устройствах");
-        return;
-    }
-
-    if (state.call.screen) {
-        state.call.localStream?.getVideoTracks().forEach((t) => {
-            t.stop();
-            state.call.localStream.removeTrack(t);
-        });
-        state.call.screen = false;
-        state.call.cam = false;
-        for (const pc of state.call.peers.values()) {
-            const sender = pc
-                .getSenders()
-                .find((s) => s.track?.kind === "video");
-            if (sender) await sender.replaceTrack(null);
-        }
-    } else {
-        try {
-            const stream = await navigator.mediaDevices.getDisplayMedia({
-                video: true,
-                audio: false,
-            });
-            const track = stream.getVideoTracks()[0];
-            state.call.localStream?.getVideoTracks().forEach((t) => {
-                t.stop();
-                state.call.localStream.removeTrack(t);
-            });
-            state.call.localStream.addTrack(track);
-            state.call.screen = true;
-            state.call.cam = true;
-
-            for (const pc of state.call.peers.values()) {
-                const sender = pc
-                    .getSenders()
-                    .find((s) => s.track?.kind === "video");
-                if (sender) {
-                    await sender.replaceTrack(track);
-                } else {
-                    pc.addTrack(track, state.call.localStream);
-                }
-            }
-            track.onended = () => {
-                if (state.call.screen) toggleScreenShare();
-            };
-        } catch (e) {
-            console.error("Screen share failed:", e);
-            return;
-        }
-    }
-
-    const localCard = state.call.tiles.get(state.me?.id);
-    if (localCard) {
-        const vtracks = state.call.localStream?.getVideoTracks() || [];
-        if (vtracks.length) {
-            localCard.video.srcObject = new MediaStream(vtracks);
-            safePlayMedia(localCard.video, true);
-        } else {
-            localCard.video.srcObject = null;
-        }
-    }
-
-    updateLocalTileState();
-    broadcastCallState();
-    updateCallButtons();
-}
-
-async function rotateCamera() {
-    state.devicePrefs.camFacing =
-        state.devicePrefs.camFacing === "environment" ? "user" : "environment";
-    if (!state.call.cam || state.call.screen) return;
-
-    const oldTrack = state.call.localStream?.getVideoTracks()[0];
-    if (oldTrack) {
-        oldTrack.stop();
-        state.call.localStream.removeTrack(oldTrack);
-    }
-
-    try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-            video: { facingMode: { exact: state.devicePrefs.camFacing } },
-        });
-        const newTrack = stream.getVideoTracks()[0];
-        state.call.localStream.addTrack(newTrack);
-
-        for (const pc of state.call.peers.values()) {
-            const sender = pc
-                .getSenders()
-                .find((s) => s.track?.kind === "video");
-            if (sender) await sender.replaceTrack(newTrack);
-        }
-
-        const localCard = state.call.tiles.get(state.me?.id);
-        if (localCard) {
-            localCard.video.srcObject = new MediaStream([newTrack]);
-            safePlayMedia(localCard.video, true);
-        }
-    } catch (e) {
-        console.error("rotateCamera failed:", e);
-    }
-}
-
-function updateLocalTileState() {
-    const card = state.call.tiles.get(state.me?.id);
-    if (!card) return;
-    card.stateSpan.textContent = `${state.call.mic ? "🎤" : "🔇"} ${state.call.cam ? (state.call.screen ? "🖥️" : "📷") : ""}`;
-}
-
-function broadcastCallState() {
-    if (
-        !state.ws ||
-        state.ws.readyState !== WebSocket.OPEN ||
-        !state.call.active
-    )
-        return;
-    state.ws.send(
-        JSON.stringify({
-            type: "call:state",
-            chat_id: state.call.chatId,
-            mic: state.call.mic,
-            cam: state.call.cam,
-            screen: state.call.screen,
-        }),
-    );
-}
-
-function setRemoteTileState(userId, s) {
-    if (!s) return;
-    const card = state.call.tiles.get(Number(userId));
-    if (!card) return;
-    card.stateSpan.textContent = `${s.mic ? "🎤" : "🔇"} ${s.cam ? (s.screen ? "🖥️" : "📷") : ""}`;
-}
-
-function startCallTimer() {
-    if (state.call.timer) clearInterval(state.call.timer);
-    state.call.timer = setInterval(() => {
-        const el = qs("callTimer");
-        if (el)
-            el.textContent = fmtDuration(
-                Math.floor((Date.now() - state.call.startedAt) / 1000),
-            );
-    }, 1000);
-}
-
-function stopCallTimer() {
-    if (state.call.timer) {
-        clearInterval(state.call.timer);
-        state.call.timer = null;
-    }
-}
-
-function updateCallButtons() {
-    const btnMic = qs("btnToggleMic");
-    const btnCam = qs("btnToggleCam");
-    const btnScreen = qs("btnShareScreen");
-    const btnRotate = qs("btnRotateCam");
-    if (btnMic) {
-        btnMic.textContent = state.call.mic ? "🎤" : "🔇";
-        btnMic.title = state.call.mic
-            ? "Выключить микрофон"
-            : "Включить микрофон";
-    }
-    if (btnCam) {
-        btnCam.textContent = state.call.cam
-            ? state.call.screen
-                ? "🖥️"
-                : "📷"
-            : "🚫";
-        btnCam.title = state.call.cam ? "Выключить камеру" : "Включить камеру";
-    }
-    if (btnScreen) {
-        const canShare = !isMobile && !!navigator.mediaDevices?.getDisplayMedia;
-        btnScreen.textContent = state.call.screen ? "🖥️" : "🪟";
-        btnScreen.disabled = !canShare;
-        canShare ? show(btnScreen) : hide(btnScreen);
-    }
-    if (btnRotate) {
-        if (isMobile && state.call.active) show(btnRotate);
-        else hide(btnRotate);
-    }
-}
-
-// ─── WS-обработчик событий звонка ────────────────────────────────────────────
-function handleCallWebSocketMessage(msg) {
-    // call:ring разрешён даже без активного звонка
-    if (msg.type === "call:ring") {
-        const chat = state.chats.find((c) => c.id === msg.payload.chat_id);
-        state.ui.incomingCall = {
-            chatId: msg.payload.chat_id,
-            title: chat?.title || chat?.peer?.nickname || "Входящий звонок",
-        };
-        const el = qs("incomingCallText");
-        if (el)
-            el.textContent = `Входящий звонок: ${state.ui.incomingCall.title}`;
-        show(qs("incomingCallToast"));
-        return;
-    }
-
-    if (!state.call.active) return;
-
-    switch (msg.type) {
-        case "call:participants": {
-            const others = (msg.payload.users || []).map(Number);
-            const states = msg.payload.states || {};
-            others.forEach(async (uid) => {
-                if (uid === state.me?.id) return;
-                setRemoteTileState(uid, states[uid]);
-                // Инициатор — у кого меньший ID
-                if (state.me.id < uid) await createOfferPeer(uid);
-            });
-            break;
-        }
-        case "call:user_joined": {
-            const uid = Number(msg.payload.user_id);
-            if (uid === state.me?.id) break;
-            setRemoteTileState(uid, msg.payload.state);
-            if (state.me.id < uid) createOfferPeer(uid);
-            break;
-        }
-        case "call:user_left":
-            removePeer(Number(msg.payload.user_id));
-            break;
-        case "call:signal":
-            handleCallSignal(Number(msg.payload.from_user), msg.payload.signal);
-            break;
-        case "call:user_state":
-            setRemoteTileState(
-                Number(msg.payload.user_id),
-                msg.payload.state || {},
-            );
-            break;
-    }
-}
-
-// =============================================================================
-// === КОНЕЦ ЛОГИКИ ЗВОНКОВ ===
-// =============================================================================
-
-// ─── Устройства ──────────────────────────────────────────────────────────────
-
-async function listMediaDevices() {
-    try {
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        return {
-            mics: devices.filter((d) => d.kind === "audioinput"),
-            cams: devices.filter((d) => d.kind === "videoinput"),
-            speakers: devices.filter((d) => d.kind === "audiooutput"),
-        };
-    } catch {
-        return { mics: [], cams: [], speakers: [] };
-    }
-}
-
-function fillSelect(selectEl, devices, selectedId, fallbackLabel) {
-    if (!selectEl) return;
-    selectEl.innerHTML = "";
-    const auto = document.createElement("option");
-    auto.value = "";
-    auto.textContent = fallbackLabel;
-    selectEl.appendChild(auto);
-    devices.forEach((d) => {
-        const opt = document.createElement("option");
-        opt.value = d.deviceId;
-        opt.textContent = d.label || d.deviceId.slice(0, 8);
-        if (selectedId && selectedId === d.deviceId) opt.selected = true;
-        selectEl.appendChild(opt);
-    });
-}
-
-async function refreshDevicePanel() {
-    try {
-        await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
-    } catch (_) {}
-    const { mics, cams, speakers } = await listMediaDevices();
-    fillSelect(
-        qs("selMic"),
-        mics,
-        state.devicePrefs.micId,
-        "Системный микрофон",
-    );
-    fillSelect(qs("selCam"), cams, state.devicePrefs.camId, "Системная камера");
-    fillSelect(
-        qs("selSpeaker"),
-        speakers,
-        state.devicePrefs.speakerId,
-        "Системный вывод",
-    );
-    const speakerSel = qs("selSpeaker");
-    if (speakerSel) {
-        if (!("setSinkId" in HTMLMediaElement.prototype)) {
-            speakerSel.disabled = true;
-            speakerSel.title = "Safari/iOS ограничивает выбор аудиовыхода";
-        } else {
-            speakerSel.disabled = false;
-            speakerSel.title = "";
-        }
-    }
-    const modeSel = qs("selAudioMode");
-    if (modeSel) modeSel.value = state.devicePrefs.audioMode || "speaker";
-}
-
-async function applySpeakerToMedia(mediaEl) {
-    if (!mediaEl || typeof mediaEl.setSinkId !== "function") return;
-    try {
-        await mediaEl.setSinkId(state.devicePrefs.speakerId || "");
-    } catch (_) {}
-}
-
-async function applySpeakerToAllTiles() {
-    for (const [uid, card] of state.call.tiles.entries()) {
-        if (uid === state.me?.id) continue;
-        if (card.audio) await applySpeakerToMedia(card.audio);
-        if (card.video) await applySpeakerToMedia(card.video);
-    }
-}
-
-async function switchMicDevice(deviceId) {
-    state.devicePrefs.micId = deviceId || "";
-    if (!state.call.active) return;
-    try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-            audio: state.devicePrefs.micId
-                ? { deviceId: { exact: state.devicePrefs.micId } }
-                : true,
-            video: false,
-        });
-        const newTrack = stream.getAudioTracks()[0];
-        if (!newTrack) return;
-        newTrack.enabled = state.call.mic;
-        state.call.localStream?.getAudioTracks().forEach((t) => {
-            t.stop();
-            state.call.localStream.removeTrack(t);
-        });
-        state.call.localStream?.addTrack(newTrack);
-        for (const pc of state.call.peers.values()) {
-            const sender = pc
-                .getSenders()
-                .find((s) => s.track?.kind === "audio");
-            if (sender) await sender.replaceTrack(newTrack);
-        }
-    } catch (e) {
-        console.error("switchMicDevice failed:", e);
-    }
-}
-
-async function switchCamDevice(deviceId) {
-    state.devicePrefs.camId = deviceId || "";
-    if (!state.call.active || !state.call.cam) return;
-    try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-            video: state.devicePrefs.camId
-                ? { deviceId: { exact: state.devicePrefs.camId } }
-                : true,
-        });
-        const newTrack = stream.getVideoTracks()[0];
-        if (!newTrack) return;
-        state.call.localStream?.getVideoTracks().forEach((t) => {
-            t.stop();
-            state.call.localStream.removeTrack(t);
-        });
-        state.call.localStream?.addTrack(newTrack);
-        for (const pc of state.call.peers.values()) {
-            const sender = pc
-                .getSenders()
-                .find((s) => s.track?.kind === "video");
-            if (sender) await sender.replaceTrack(newTrack);
-        }
-        const localCard = state.call.tiles.get(state.me?.id);
-        if (localCard) {
-            localCard.video.srcObject = new MediaStream(
-                state.call.localStream.getTracks(),
-            );
-            safePlayMedia(localCard.video, true);
-        }
-    } catch (e) {
-        console.error("switchCamDevice failed:", e);
-    }
-}
-
-async function applyAudioMode(mode) {
-    state.devicePrefs.audioMode = mode || "speaker";
-    const audioSession = navigator.audioSession;
-    if (audioSession && "type" in audioSession) {
-        try {
-            audioSession.type =
-                mode === "phone" ? "play-and-record" : "playback";
-        } catch (_) {}
-    }
-    await applySpeakerToAllTiles();
-}
-
-// ─── Контекстное меню сообщений ──────────────────────────────────────────────
-
-let _ctxMenuEl = null;
-let _ctxLongPressTimer = null;
-
-function hideContextMenu() {
-    if (_ctxMenuEl) {
-        _ctxMenuEl.remove();
-        _ctxMenuEl = null;
-    }
-}
-
-function showMessageContextMenu(x, y, msgEl) {
-    hideContextMenu();
-    const mid = Number(msgEl.dataset.mid);
-    const isMine = msgEl.dataset.mine === "1";
-    if (!mid) return;
-
-    const menu = document.createElement("div");
-    menu.className = "msg-ctx-menu";
-    menu.style.cssText = `position:fixed;z-index:200;left:${x}px;top:${y}px`;
-    _ctxMenuEl = menu;
-
-    const btnDelMe = document.createElement("button");
-    btnDelMe.textContent = "🗑️ Удалить у себя";
-    btnDelMe.onclick = async () => {
-        hideContextMenu();
-        try {
-            await api(`/api/messages/${mid}?mode=me`, { method: "DELETE" });
-            msgEl.remove();
-        } catch (e) {
-            alert(e.message);
-        }
-    };
-    menu.appendChild(btnDelMe);
-
-    if (isMine) {
-        const btnDelAll = document.createElement("button");
-        btnDelAll.textContent = "🗑️ Удалить у всех";
-        btnDelAll.onclick = async () => {
-            hideContextMenu();
-            if (!confirm("Удалить сообщение у всех?")) return;
-            try {
-                await api(`/api/messages/${mid}?mode=all`, {
-                    method: "DELETE",
-                });
-            } catch (e) {
-                alert(e.message);
-            }
-        };
-        menu.appendChild(btnDelAll);
-    }
-
-    document.body.appendChild(menu);
-    const rect = menu.getBoundingClientRect();
-    if (rect.right > window.innerWidth - 8)
-        menu.style.left = `${window.innerWidth - rect.width - 8}px`;
-    if (rect.bottom > window.innerHeight - 8)
-        menu.style.top = `${y - rect.height}px`;
-    setTimeout(
-        () =>
-            document.addEventListener("click", hideContextMenu, { once: true }),
-        0,
-    );
-}
-
-function bindMessageContextMenu(container) {
-    container.addEventListener("contextmenu", (e) => {
-        const msgEl = e.target.closest(".message[data-mid]");
-        if (!msgEl) return;
-        e.preventDefault();
-        showMessageContextMenu(e.clientX, e.clientY, msgEl);
-    });
-    container.addEventListener(
-        "touchstart",
-        (e) => {
-            const msgEl = e.target.closest(".message[data-mid]");
-            if (!msgEl) return;
-            const touch = e.touches[0];
-            _ctxLongPressTimer = setTimeout(() => {
-                if (navigator.vibrate) navigator.vibrate(30);
-                showMessageContextMenu(touch.clientX, touch.clientY, msgEl);
-            }, 550);
-        },
-        { passive: true },
-    );
-    container.addEventListener(
-        "touchend",
-        () => clearTimeout(_ctxLongPressTimer),
-        { passive: true },
-    );
-    container.addEventListener(
-        "touchmove",
-        () => clearTimeout(_ctxLongPressTimer),
-        { passive: true },
-    );
-}
-
-// ─── Вставка изображения из буфера обмена ────────────────────────────────────
-
-function bindClipboardPaste(inputEl) {
-    inputEl.addEventListener("paste", async (e) => {
-        if (!state.currentChatId) return;
-        const items = e.clipboardData?.items;
-        if (!items) return;
-        for (const item of items) {
-            if (item.type.startsWith("image/")) {
-                const file = item.getAsFile();
-                if (!file) continue;
-                e.preventDefault();
-                const ext = item.type.split("/")[1] || "png";
-                const named = new File([file], `paste_${Date.now()}.${ext}`, {
-                    type: item.type,
-                });
-                try {
-                    await sendMessage({ file: named, kind: "image" });
-                } catch (err) {
-                    console.error("Paste send error:", err);
-                }
-                return;
-            }
-        }
-    });
-}
-
-// ─── Панель участников ────────────────────────────────────────────────────────
-
-function openMembersSheet() {
-    const panel = qs("groupMembersPanel");
-    const backdrop = qs("membersBackdrop");
-    if (!panel) return;
-    panel.classList.add("members-modal-open");
-    show(panel);
-    if (backdrop) {
-        show(backdrop);
-        requestAnimationFrame(() => {
-            backdrop.classList.add("open");
-            requestAnimationFrame(() => panel.classList.add("sheet-visible"));
-        });
-    }
-    document.addEventListener("keydown", _membersEscHandler);
-}
-
-function closeMembersSheet() {
-    const panel = qs("groupMembersPanel");
-    const backdrop = qs("membersBackdrop");
-    if (!panel) return;
-    panel.classList.remove("sheet-visible");
-    if (backdrop) backdrop.classList.remove("open");
-    const onEnd = () => {
-        panel.classList.remove("members-modal-open");
-        hide(panel);
-        if (backdrop) hide(backdrop);
-        panel.removeEventListener("transitionend", onEnd);
-    };
-    panel.addEventListener("transitionend", onEnd);
-    document.removeEventListener("keydown", _membersEscHandler);
-    setTimeout(() => {
-        if (!panel.classList.contains("sheet-visible")) {
-            panel.classList.remove("members-modal-open");
-            hide(panel);
-            if (backdrop) hide(backdrop);
-        }
-    }, 400);
-}
-
-function _membersEscHandler(e) {
-    if (e.key === "Escape") closeMembersSheet();
-}
-
-// ─── WebSocket ────────────────────────────────────────────────────────────────
-
-function stopWsHeartbeat() {
-    if (state.wsMeta.pingTimer) {
-        clearInterval(state.wsMeta.pingTimer);
-        state.wsMeta.pingTimer = null;
-    }
-    if (state.wsMeta.pongTimer) {
-        clearTimeout(state.wsMeta.pongTimer);
-        state.wsMeta.pongTimer = null;
-    }
-}
-
-function scheduleWsReconnect() {
-    if (state.wsMeta.reconnectTimer) return;
-    const delay = Math.min(6000, 900 + state.wsMeta.retry * 450);
-    state.wsMeta.retry += 1;
-    state.wsMeta.reconnectTimer = setTimeout(() => {
-        state.wsMeta.reconnectTimer = null;
-        connectWs();
-    }, delay);
-}
-
-function startWsHeartbeat() {
-    stopWsHeartbeat();
-    state.wsMeta.pingTimer = setInterval(() => {
-        if (!state.ws || state.ws.readyState !== WebSocket.OPEN) return;
-        state.ws.send(JSON.stringify({ type: "ping" }));
-        if (state.wsMeta.pongTimer) clearTimeout(state.wsMeta.pongTimer);
-        state.wsMeta.pongTimer = setTimeout(() => {
-            try {
-                state.ws.close();
-            } catch (_) {}
-        }, 9000);
-    }, 15000);
-}
-
-function resetCallPeersForRejoin() {
-    state.call.peers.forEach((pc) => pc.close());
-    state.call.peers.clear();
-    state.call.pendingCandidates.clear();
-
-    const grid = qs("callGrid");
-    if (grid) grid.innerHTML = "";
-    state.call.tiles.clear();
-
-    if (state.call.localStream) {
-        const localCard = createCallTile(state.me?.id, true);
-        if (localCard) {
-            localCard.video.srcObject = new MediaStream(
-                state.call.localStream.getTracks(),
-            );
-            safePlayMedia(localCard.video, true);
-            state.call.tiles.set(state.me?.id, localCard);
-        }
-    }
-}
-
-async function syncCurrentChatIfOpen() {
-    if (!state.currentChatId) return;
-    if (state.ws && state.ws.readyState === WebSocket.OPEN) return;
-    const prev = qs("messages");
-    if (!prev) return;
-    const atBottom =
-        prev.scrollHeight - prev.scrollTop - prev.clientHeight < 60;
-    try {
-        const data = await api(`/api/chats/${state.currentChatId}/messages`);
-        const existingIds = new Set(
-            Array.from(prev.querySelectorAll("[data-mid]")).map((el) =>
-                Number(el.dataset.mid),
-            ),
-        );
-        let added = 0;
-        data.forEach((m) => {
-            if (!existingIds.has(m.id)) {
-                appendMessage(m);
-                added++;
-            }
-        });
-        if (added > 0 && atBottom) prev.scrollTop = prev.scrollHeight;
-    } catch (_) {}
-}
-
-function startFallbackSync() {
-    if (state.syncTimer) clearInterval(state.syncTimer);
-    state.syncTimer = setInterval(async () => {
-        try {
-            await Promise.all([
-                loadChats(),
-                loadFriends(),
-                loadFriendRequests(),
-            ]);
-            await loadGroupInvites();
-            await syncCurrentChatIfOpen();
-        } catch (_) {}
-    }, 12000);
-}
-
-function connectWs() {
-    if (!state.token) return;
-    if (
-        state.ws &&
-        (state.ws.readyState === WebSocket.OPEN ||
-            state.ws.readyState === WebSocket.CONNECTING)
-    )
-        return;
-    const proto = location.protocol === "https:" ? "wss" : "ws";
-    const ws = new WebSocket(
-        `${proto}://${location.host}/ws?token=${encodeURIComponent(state.token)}`,
-    );
-    state.ws = ws;
-
-    ws.onopen = async () => {
-        state.wsMeta.retry = 0;
-        stopWsHeartbeat();
-        startWsHeartbeat();
-        try {
-            await Promise.all([
-                loadChats(),
-                loadFriends(),
-                loadFriendRequests(),
-            ]);
-            await syncCurrentChatIfOpen();
-        } catch (_) {}
-        if (state.call.active && state.call.chatId) {
-            resetCallPeersForRejoin();
-            ws.send(
-                JSON.stringify({
-                    type: "call:join",
-                    chat_id: state.call.chatId,
-                    mic: state.call.mic,
-                    cam: state.call.cam,
-                    screen: state.call.screen,
-                }),
-            );
-        }
-    };
-
-    ws.onmessage = async (ev) => {
-        let msg;
-        try {
-            msg = JSON.parse(ev.data);
-        } catch {
-            return;
-        }
-
-        if (msg.type === "pong") {
-            if (state.wsMeta.pongTimer) {
-                clearTimeout(state.wsMeta.pongTimer);
-                state.wsMeta.pongTimer = null;
-            }
-            return;
-        }
-
-        if (msg.type === "message:new") {
-            if (msg.payload.chat_id === state.currentChatId) {
-                appendMessage(msg.payload);
-                if (msg.payload.user_id !== state.me?.id)
-                    markChatRead(state.currentChatId);
-            }
-            loadChats();
-        }
-        if (msg.type === "message:read") {
-            const { chat_id, reader_id, up_to_id } = msg.payload;
-            if (reader_id !== state.me?.id && chat_id === state.currentChatId)
-                updateReadStatusUpTo(up_to_id);
-        }
-        if (msg.type === "message:deleted_all") {
-            if (msg.payload.chat_id === state.currentChatId)
-                removeMessageById(msg.payload.message_id);
-            loadChats();
-        }
-        if (msg.type === "message:deleted_me") {
-            if (msg.payload.chat_id === state.currentChatId)
-                removeMessageById(msg.payload.message_id);
-            loadChats();
-        }
-        if (
-            msg.type === "friend:request" ||
-            msg.type === "friend:accepted" ||
-            msg.type === "chat:added"
-        )
-            refreshSide();
-        if (msg.type === "group:invite" || msg.type === "group:invite_answer")
-            loadGroupInvites();
-        if (msg.type === "group:deleted") {
-            if (state.currentChatId === msg.payload.chat_id) {
-                state.currentChatId = null;
-                state.currentChat = null;
-                const msgEl = qs("messages");
-                const memEl = qs("chatMembers");
-                if (msgEl) msgEl.innerHTML = "";
-                if (memEl) memEl.innerHTML = "";
-                setChatHeader(null);
-                setChatOpen(false);
-            }
-            refreshSide();
-        }
-        if (msg.type === "group:member_removed") {
-            if (
-                msg.payload.user_id === state.me?.id &&
-                state.currentChatId === msg.payload.chat_id
-            ) {
-                state.currentChatId = null;
-                state.currentChat = null;
-                const msgEl = qs("messages");
-                const memEl = qs("chatMembers");
-                if (msgEl) msgEl.innerHTML = "";
-                if (memEl) memEl.innerHTML = "";
-                setChatHeader(null);
-                setChatOpen(false);
-            }
-            if (state.currentChatId === msg.payload.chat_id)
-                loadMembers(msg.payload.chat_id);
-            refreshSide();
-        }
-        if (msg.type === "group:member_role") {
-            if (state.currentChatId === msg.payload.chat_id)
-                loadMembers(msg.payload.chat_id);
-            loadChats();
-        }
-        if (msg.type === "user:blocked") refreshSide();
-
-        // Звонки
-        handleCallWebSocketMessage(msg);
-    };
-
-    ws.onclose = () => {
-        stopWsHeartbeat();
-        scheduleWsReconnect();
-    };
-    ws.onerror = () => {
-        try {
-            ws.close();
-        } catch (_) {}
-    };
-}
-
-// ─── Сессия и настройки ──────────────────────────────────────────────────────
-
-async function ensureSession() {
-    if (!state.token) return false;
-    try {
-        state.me = await api("/api/me");
-        return true;
-    } catch (_) {
-        localStorage.removeItem("token");
-        state.token = "";
-        return false;
-    }
-}
-
-async function loadSettings() {
-    state.settings = await api("/api/settings");
-    const privacySettings = qs("privacySettings");
-    if (privacySettings) {
-        privacySettings.value = state.settings.allow_friend_requests || "everyone";
-    }
-    // Загрузка настроек DND
-    const dndEnabled = qs("dndEnabled");
-    const dndTimeSettings = qs("dndTimeSettings");
-    const dndStartTime = qs("dndStartTime");
-    const dndEndTime = qs("dndEndTime");
-    if (dndEnabled) {
-        dndEnabled.checked = !!state.settings.dnd_enabled;
-    }
-    if (dndTimeSettings) {
-        dndTimeSettings.style.display = dndEnabled?.checked ? "block" : "none";
-    }
-    if (dndStartTime) {
-        dndStartTime.value = state.settings.dnd_start_time || "22:00";
-    }
-    if (dndEndTime) {
-        dndEndTime.value = state.settings.dnd_end_time || "08:00";
-    }
-}
-
-async function onAuthorized() {
-    hide(qs("gateScreen"));
-    hide(qs("authScreen"));
-    show(qs("app"));
-    renderProfileMini();
-    await Promise.all([
-        loadChats(),
-        loadFriends(),
-        loadFriendRequests(),
-        loadGroupInvites(),
-        loadSettings(),
-    ]);
-    connectWs();
-    startFallbackSync();
-}
-
-function resetToAuthUi() {
-    hide(qs("app"));
-    show(qs("authScreen"));
-    hide(qs("gateScreen"));
-    setError("authError", "");
-    setError("gateError", "");
-    state.me = null;
-    state.settings = null;
-    state.chats = [];
-    state.friends = [];
-    state.currentChat = null;
-    state.currentChatId = null;
-}
-
-// ─── Привязка UI ─────────────────────────────────────────────────────────────
-
-function bindUi() {
-    setMainTab("chats");
-    setChatOpen(false);
-    setEmptyState(true);
-    const gateCode = qs("gateCode");
-    if (gateCode)
-        gateCode.value = localStorage.getItem("saved_gate_code") || "";
-
-    const tabChats = qs("tabChats");
-    const tabRequests = qs("tabRequests");
-    const tabSearch = qs("tabSearch");
-    const tabFriends = qs("tabFriends");
-    const tabSettings = qs("tabSettings");
-    const btnBack = qs("btnBackToList");
-    const btnMobile = qs("btnMobileMenu");
-    const gateBtn = qs("gateBtn");
-    const tabLogin = qs("tabLogin");
-    const tabRegister = qs("tabRegister");
-    const loginBtn = qs("loginBtn");
-    const registerBtn = qs("registerBtn");
-    const btnLogout = qs("btnLogout");
-    const chatSearch = qs("chatSearch");
-    const sendBtn = qs("sendBtn");
-    const messageInput = qs("messageInput");
-    const btnFile = qs("btnFile");
-    const fileInput = qs("fileInput");
-    const btnAssets = qs("btnAssets");
-    const assetsDialog = qs("assetsDialog");
-    const assetsClose = qs("assetsClose");
-    const btnUploadAsset = qs("btnUploadAsset");
-    const btnVoice = qs("btnVoice");
-    const btnCircle = qs("btnCircle");
-    const btnProfile = qs("btnProfile");
-    const profileDialog = qs("profileDialog");
-    const profileClose = qs("profileClose");
-    const profileSave = qs("profileSave");
-    const btnGroup = qs("btnGroup");
-    const groupDialog = qs("groupDialog");
-    const groupClose = qs("groupClose");
-    const groupCreate = qs("groupCreate");
-    const btnInviteGroup = qs("btnInviteGroup");
-    const btnLeaveChat = qs("btnLeaveChat");
-    const btnDeleteGroup = qs("btnDeleteGroup");
-    const btnGroupAvatar = qs("btnGroupAvatar");
-    const groupAvatarInput = qs("groupAvatarInput");
-    const btnFriends = qs("btnFriends");
-    const btnCopyMyId = qs("btnCopyMyId");
-    const userSearch = qs("userSearch");
-    const btnSettings = qs("btnSettings");
-    const settingsSave = qs("settingsSave");
-    const btnChangePassword = qs("btnChangePassword");
-    const btnDeleteAccount = qs("btnDeleteAccount");
-    const btnCallStart = qs("btnCallStart");
-    const btnShowMembers = qs("btnShowMembers");
-    const btnLeaveCall = qs("btnLeaveCall");
-    const btnToggleMic = qs("btnToggleMic");
-    const btnToggleCam = qs("btnToggleCam");
-    const btnRotateCam = qs("btnRotateCam");
-    const btnShareScreen = qs("btnShareScreen");
-    const btnDevices = qs("btnDevices");
-    const devicePanel = qs("devicePanel");
-    const selMic = qs("selMic");
-    const selCam = qs("selCam");
-    const selSpeaker = qs("selSpeaker");
-    const selAudioMode = qs("selAudioMode");
-    const btnMinimizeCall = qs("btnMinimizeCall");
-    const btnCallRestore = qs("btnCallRestore");
-    const btnIncomingAccept = qs("btnIncomingAccept");
-    const btnIncomingDecline = qs("btnIncomingDecline");
-    const incomingCallToast = qs("incomingCallToast");
-
-    if (tabChats) tabChats.onclick = () => setMainTab("chats");
-    if (tabRequests) tabRequests.onclick = () => setMainTab("requests");
-    if (tabSearch) tabSearch.onclick = () => setMainTab("search");
-    if (tabFriends) tabFriends.onclick = () => setMainTab("friends");
-    if (tabSettings) tabSettings.onclick = () => openSettingsTab();
-    if (btnBack) btnBack.onclick = () => setChatOpen(false);
-    if (btnMobile)
-        btnMobile.onclick = () => document.body.classList.toggle("menu-open");
-
-    if (gateBtn)
-        gateBtn.onclick = async () => {
-            setError("gateError", "");
-            try {
-                const code = qs("gateCode")?.value || "";
-                await api("/api/gate", {
-                    method: "POST",
-                    body: JSON.stringify({ code }),
-                });
-                if (qs("rememberCode")?.checked)
-                    localStorage.setItem("saved_gate_code", code);
-                hide(qs("gateScreen"));
-                show(qs("authScreen"));
-            } catch (e) {
-                setError("gateError", e.message);
-            }
-        };
-
-    if (tabLogin)
-        tabLogin.onclick = () => {
-            tabLogin.classList.add("active");
-            tabRegister?.classList.remove("active");
-            show(qs("loginPane"));
-            hide(qs("registerPane"));
-        };
-    if (tabRegister)
-        tabRegister.onclick = () => {
-            tabRegister.classList.add("active");
-            tabLogin?.classList.remove("active");
-            hide(qs("loginPane"));
-            show(qs("registerPane"));
-        };
-
-    if (loginBtn)
-        loginBtn.onclick = async () => {
-            setError("authError", "");
-            try {
-                const r = await api("/api/login", {
-                    method: "POST",
-                    body: JSON.stringify({
-                        username: qs("loginUsername")?.value || "",
-                        password: qs("loginPassword")?.value || "",
-                    }),
-                });
-                state.token = r.token;
-                state.me = r.user;
-                localStorage.setItem("token", state.token);
-                await onAuthorized();
-            } catch (e) {
-                setError("authError", e.message);
-            }
-        };
-
-    if (registerBtn)
-        registerBtn.onclick = async () => {
-            setError("authError", "");
-            try {
-                const r = await api("/api/register", {
-                    method: "POST",
-                    body: JSON.stringify({
-                        username: qs("regUsername")?.value || "",
-                        password: qs("regPassword")?.value || "",
-                        nickname: qs("regNickname")?.value || "",
-                    }),
-                });
-                state.token = r.token;
-                state.me = r.user;
-                localStorage.setItem("token", state.token);
-                await onAuthorized();
-            } catch (e) {
-                setError("authError", e.message);
-            }
-        };
-
-    if (btnLogout)
-        btnLogout.onclick = async () => {
-            try {
-                await api("/api/logout", { method: "POST", body: "{}" });
-            } catch (_) {}
-            leaveCall();
-            if (state.syncTimer) clearInterval(state.syncTimer);
-            stopWsHeartbeat();
-            try {
-                state.ws?.close();
-            } catch (_) {}
-            localStorage.removeItem("token");
-            state.token = "";
-            resetToAuthUi();
-        };
-
-    if (chatSearch) chatSearch.oninput = () => renderChatList(chatSearch.value);
-    if (sendBtn)
-        sendBtn.onclick = () =>
-            sendMessage({ text: messageInput?.value || "" });
-    if (messageInput) {
-        bindClipboardPaste(messageInput);
-        messageInput.addEventListener("keydown", (e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                sendMessage({ text: messageInput.value || "" });
-            }
-        });
-    }
-    const messagesEl = qs("messages");
-    if (messagesEl) bindMessageContextMenu(messagesEl);
-
-    if (btnFile) btnFile.onclick = () => fileInput?.click();
-    if (btnVoice) btnVoice.onclick = () => startVoiceRecord();
-    if (btnCircle) btnCircle.onclick = () => startCircleRecord();
-
-    if (btnAssets)
-        btnAssets.onclick = async () => {
-            await loadAssets();
-            assetsDialog?.showModal();
-        };
-    if (assetsClose) assetsClose.onclick = () => assetsDialog?.close();
-    if (btnUploadAsset)
-        btnUploadAsset.onclick = async () => {
-            const f = qs("assetFile")?.files[0];
-            if (!f) {
-                alert("Выберите файл");
-                return;
-            }
-            const form = new FormData();
-            form.append("kind", qs("assetKind")?.value || "emoji");
-            form.append("title", qs("assetTitle")?.value || "");
-            form.append("file", f);
-            await api("/api/assets", {
-                method: "POST",
-                body: form,
-                headers: {},
-            });
-            if (qs("assetFile")) qs("assetFile").value = "";
-            if (qs("assetTitle")) qs("assetTitle").value = "";
-            await loadAssets();
-        };
-
-    if (fileInput)
-        fileInput.onchange = async () => {
-            const f = fileInput.files[0];
-            if (!f) return;
-            let kind = "file";
-            if (f.type.startsWith("image/")) kind = "image";
-            if (f.type.startsWith("video/")) kind = "video";
-            await sendMessage({ file: f, kind });
-            fileInput.value = "";
-        };
-
-    if (btnProfile)
-        btnProfile.onclick = () => {
-            if (qs("profileNickname"))
-                qs("profileNickname").value = state.me?.nickname || "";
-            if (qs("profileAbout"))
-                qs("profileAbout").value = state.me?.about || "";
-            profileDialog?.showModal();
-        };
-    if (profileClose) profileClose.onclick = () => profileDialog?.close();
-    if (profileSave)
-        profileSave.onclick = async () => {
-            state.me = await api("/api/profile", {
-                method: "POST",
-                body: JSON.stringify({
-                    nickname: qs("profileNickname")?.value || "",
-                    about: qs("profileAbout")?.value || "",
-                }),
-            });
-            const avatar = qs("profileAvatar")?.files[0];
-            if (avatar) {
-                const form = new FormData();
-                form.append("file", avatar);
-                state.me = await api("/api/profile/avatar", {
-                    method: "POST",
-                    body: form,
-                    headers: {},
-                });
-            }
-            renderProfileMini();
-            profileDialog?.close();
-        };
-
-    if (btnGroup) btnGroup.onclick = () => groupDialog?.showModal();
-    if (groupClose) groupClose.onclick = () => groupDialog?.close();
-    if (groupCreate)
-        groupCreate.onclick = async () => {
-            try {
-                const members = (qs("groupMembers")?.value || "")
-                    .split(",")
-                    .map((v) => v.trim().replace(/^@/, "").toLowerCase())
-                    .filter(Boolean);
-                const out = await api("/api/groups", {
-                    method: "POST",
-                    body: JSON.stringify({
-                        title: qs("groupTitle")?.value || "",
-                        members,
-                    }),
-                });
-                if (qs("groupTitle")) qs("groupTitle").value = "";
-                if (qs("groupMembers")) qs("groupMembers").value = "";
-                groupDialog?.close();
-                await loadChats();
-                await openChat(out.chat_id);
-            } catch (e) {
-                alert(e.message);
-            }
-        };
-
-    if (btnInviteGroup)
-        btnInviteGroup.onclick = async () => {
-            if (!state.currentChat || state.currentChat.type !== "group")
-                return;
-            const raw = prompt("Введите @username для инвайта");
-            const username = String(raw || "").trim();
-            if (!username) return;
-            try {
-                await api(
-                    `/api/groups/${state.currentChatId}/invite/username`,
-                    { method: "POST", body: JSON.stringify({ username }) },
-                );
-                alert("Инвайт отправлен");
-            } catch (e) {
-                alert(e.message);
-            }
-        };
-
-    if (btnGroupAvatar)
-        btnGroupAvatar.onclick = () => {
-            if (!state.currentChat || state.currentChat.type !== "group")
-                return;
-            groupAvatarInput?.click();
-        };
-
-    if (groupAvatarInput)
-        groupAvatarInput.onchange = async () => {
-            if (!state.currentChatId || !groupAvatarInput.files?.length)
-                return;
-            const file = groupAvatarInput.files[0];
-            const formData = new FormData();
-            formData.append("file", file);
-            try {
-                await api(`/api/groups/${state.currentChatId}/avatar`, {
-                    method: "POST",
-                    body: formData,
-                    headers: {},
-                });
-                await loadChats();
-                alert("Аватарка обновлена");
-            } catch (e) {
-                alert(e.message);
-            }
-            groupAvatarInput.value = "";
-        };
-
-    if (btnLeaveChat)
-        btnLeaveChat.onclick = async () => {
-            if (!state.currentChatId) return;
-            const targetName =
-                state.currentChat?.type === "group" ? "эту группу" : "этот чат";
-            if (!confirm(`Выйти из ${targetName}?`)) return;
-            if (state.call.active && state.call.chatId === state.currentChatId)
-                leaveCall();
-            await api(`/api/chats/${state.currentChatId}/leave`, {
-                method: "POST",
-                body: "{}",
-            });
-            state.currentChat = null;
-            state.currentChatId = null;
-            const msgEl = qs("messages");
-            const memEl = qs("chatMembers");
-            if (msgEl) msgEl.innerHTML = "";
-            if (memEl) memEl.innerHTML = "";
-            setChatHeader(null);
-            setChatOpen(false);
-            await loadChats();
-        };
-
-    if (btnDeleteGroup)
-        btnDeleteGroup.onclick = async () => {
-            if (!state.currentChat || state.currentChat.type !== "group")
-                return;
-            if (!confirm("Удалить группу?")) return;
-            await api(`/api/groups/${state.currentChatId}`, {
-                method: "DELETE",
-            });
-            state.currentChat = null;
-            state.currentChatId = null;
-            const msgEl = qs("messages");
-            const memEl = qs("chatMembers");
-            if (msgEl) msgEl.innerHTML = "";
-            if (memEl) memEl.innerHTML = "";
-            setChatHeader(null);
-            setChatOpen(false);
-            await loadChats();
-        };
-
-    if (btnFriends) btnFriends.onclick = refreshSide;
-    if (btnCopyMyId)
-        btnCopyMyId.onclick = async () => {
-            try {
-                await navigator.clipboard.writeText(String(state.me?.id || ""));
-                alert(`ID скопирован: ${state.me?.id}`);
-            } catch (_) {
-                prompt("Скопируйте ваш ID", String(state.me?.id || ""));
-            }
-        };
-
-    if (userSearch)
-        userSearch.oninput = async () => {
-            const q = userSearch.value.trim();
-            const out = qs("userResults");
-            if (!out) return;
-            if (q.length < 2) {
-                out.innerHTML = "";
-                return;
-            }
-            const users = await api(
-                `/api/users/search?q=${encodeURIComponent(q)}`,
-            );
-            out.innerHTML = "";
-            users.forEach((u) => {
-                const el = document.createElement("div");
-                el.className = "item";
-                el.innerHTML = `
-                <div class="item-head">
-                    ${avatarMarkup({ avatar: u.avatar, label: u.nickname, seed: `search-${u.id}`, className: "avatar-md" })}
-                    <div class="item-copy">
-                        <div class="item-title-row"><b>${escapeHtml(u.nickname)}</b><span class="item-tag">User</span></div>
-                        <small>@${escapeHtml(u.username)} #${u.id}</small>
-                        ${u.about ? `<p class="item-preview">${escapeHtml(truncateText(u.about, 90))}</p>` : ""}
-                    </div>
-                </div>
-            `;
-                const actions = document.createElement("div");
-                actions.className = "actions";
-                const add = document.createElement("button");
-                add.textContent = "В друзья";
-                add.onclick = () =>
-                    api("/api/friends/request", {
-                        method: "POST",
-                        body: JSON.stringify({ username: u.username }),
-                    });
-                const block = document.createElement("button");
-                block.className = "danger";
-                block.textContent = "Блок";
-                block.onclick = async () => {
-                    await api(`/api/users/${u.id}/block`, {
-                        method: "POST",
-                        body: "{}",
-                    });
-                    await refreshSide();
-                };
-                actions.appendChild(add);
-                actions.appendChild(block);
-                el.appendChild(actions);
-                out.appendChild(el);
-            });
-        };
-
-    // Обработчик кнопки настроек в sidebar - переключает на вкладку настроек
-    if (btnSettings) btnSettings.onclick = () => openSettingsTab();
-
-    // Переключение видимости настроек времени DND
-    const dndEnabledCheckbox = qs("dndEnabled");
-    const dndTimeSettingsDiv = qs("dndTimeSettings");
-    if (dndEnabledCheckbox && dndTimeSettingsDiv) {
-        dndEnabledCheckbox.onchange = () => {
-            dndTimeSettingsDiv.style.display = dndEnabledCheckbox.checked ? "block" : "none";
-        };
-    }
-
-    // Сохранение настроек во вкладке
-    if (settingsSave)
-        settingsSave.onclick = async () => {
-            try {
-                state.settings = await api("/api/settings", {
-                    method: "POST",
-                    body: JSON.stringify({
-                        allow_friend_requests:
-                            qs("privacySettings")?.value || "everyone",
-                        allow_calls_from: qs("privacySettings")?.value || "friends",
-                        allow_group_invites: qs("privacySettings")?.value || "friends",
-                        show_last_seen: qs("privacySettings")?.value || "friends",
-                        dnd_enabled: qs("dndEnabled")?.checked || false,
-                        dnd_start_time: qs("dndStartTime")?.value || "22:00",
-                        dnd_end_time: qs("dndEndTime")?.value || "08:00",
-                    }),
-                });
-                alert("Настройки сохранены");
-            } catch (e) {
-                alert(e.message);
-            }
-        };
-
-    if (btnChangePassword)
-        btnChangePassword.onclick = async () => {
-            const oldPassword = qs("oldPassword")?.value || "";
-            const newPassword = qs("newPassword")?.value || "";
-            if (!oldPassword || !newPassword) {
-                alert("Введите старый и новый пароль");
-                return;
-            }
-            await api("/api/account/password", {
-                method: "POST",
-                body: JSON.stringify({
-                    old_password: oldPassword,
-                    new_password: newPassword,
-                }),
-            });
-            if (qs("oldPassword")) qs("oldPassword").value = "";
-            if (qs("newPassword")) qs("newPassword").value = "";
-            alert("Пароль успешно изменён");
-        };
-
-    if (btnDeleteAccount)
-        btnDeleteAccount.onclick = async () => {
-            if (
-                !confirm(
-                    "Удалить аккаунт безвозвратно? Это удалит ваши сессии и уберёт вас из чатов.",
-                )
+        if "theme" not in cols:
+            conn.execute(
+                "ALTER TABLE user_settings ADD COLUMN theme TEXT NOT NULL DEFAULT 'default'"
             )
-                return;
-            try {
-                await api("/api/account", { method: "DELETE" });
-            } catch (e) {
-                alert(e.message);
-                return;
-            }
-            leaveCall();
-            if (state.syncTimer) clearInterval(state.syncTimer);
-            stopWsHeartbeat();
-            try {
-                state.ws?.close();
-            } catch (_) {}
-            localStorage.removeItem("token");
-            state.token = "";
-            resetToAuthUi();
-        };
 
-    if (btnCallStart) btnCallStart.onclick = startCall;
-    if (btnShowMembers) btnShowMembers.onclick = () => openMembersSheet();
-    const btnCloseMembers = qs("btnCloseMembers");
-    if (btnCloseMembers) btnCloseMembers.onclick = () => closeMembersSheet();
-    const membersBackdrop = qs("membersBackdrop");
-    if (membersBackdrop) membersBackdrop.onclick = () => closeMembersSheet();
+    conn.close()
 
-    if (btnLeaveCall) btnLeaveCall.onclick = leaveCall;
-    if (btnToggleMic) btnToggleMic.onclick = toggleMic;
-    if (btnToggleCam) btnToggleCam.onclick = toggleCam;
-    if (btnRotateCam) btnRotateCam.onclick = rotateCamera;
-    if (btnShareScreen) btnShareScreen.onclick = toggleScreenShare;
 
-    if (btnDevices)
-        btnDevices.onclick = async () => {
-            if (!devicePanel) return;
-            if (devicePanel.classList.contains("hidden")) {
-                await refreshDevicePanel();
-                show(devicePanel);
-            } else hide(devicePanel);
-        };
+def get_user_by_token(token: str) -> Optional[sqlite3.Row]:
+    conn = get_db()
+    row = conn.execute(
+        "SELECT u.* FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ?",
+        (token,),
+    ).fetchone()
+    conn.close()
+    return row
 
-    if (selMic) selMic.onchange = async () => switchMicDevice(selMic.value);
-    if (selCam) selCam.onchange = async () => switchCamDevice(selCam.value);
-    if (selSpeaker)
-        selSpeaker.onchange = async () => {
-            state.devicePrefs.speakerId = selSpeaker.value || "";
-            await applySpeakerToAllTiles();
-        };
-    if (selAudioMode)
-        selAudioMode.onchange = async () => applyAudioMode(selAudioMode.value);
+def get_current_user(request: Request) -> sqlite3.Row:
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    token = auth.replace("Bearer ", "", 1).strip()
+    user = get_user_by_token(token)
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    return user
 
-    if (btnMinimizeCall)
-        btnMinimizeCall.onclick = () => {
-            hide(qs("callOverlay"));
-            state.ui.callMinimized = true;
-            show(qs("btnCallRestore"));
-        };
-    if (btnCallRestore)
-        btnCallRestore.onclick = () => {
-            if (!state.call.active) return;
-            show(qs("callOverlay"));
-            hide(qs("btnCallRestore"));
-            state.ui.callMinimized = false;
-        };
-
-    if (btnIncomingAccept)
-        btnIncomingAccept.onclick = async () => {
-            await unlockAudioContext();
-            const incoming = state.ui.incomingCall;
-            hide(incomingCallToast);
-            if (!incoming) return;
-            const chat = state.chats.find((c) => c.id === incoming.chatId);
-            if (chat) {
-                await openChat(chat.id);
-                await startCall();
-            }
-            state.ui.incomingCall = null;
-        };
-    if (btnIncomingDecline)
-        btnIncomingDecline.onclick = () => {
-            hide(incomingCallToast);
-            state.ui.incomingCall = null;
-        };
-}
-
-// ─── Boot ─────────────────────────────────────────────────────────────────────
-
-async function boot() {
-    if (window.__lanMessengerBooted) return;
-    window.__lanMessengerBooted = true;
-    installResponsiveEnvironment();
-    bindUi();
-    const sessionOk = await ensureSession();
-    if (sessionOk) {
-        await onAuthorized();
-        return;
+def ensure_settings(conn: sqlite3.Connection, user_id: int):
+    cols = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(user_settings)").fetchall()
     }
-    hide(qs("app"));
-    hide(qs("gateScreen"));
-    show(qs("authScreen"));
-}
+    if "theme" not in cols:
+        conn.execute(
+            "ALTER TABLE user_settings ADD COLUMN theme TEXT NOT NULL DEFAULT 'default'"
+        )
 
-boot();
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO user_settings(
+            user_id,
+            allow_friend_requests,
+            allow_calls_from,
+            allow_group_invites,
+            show_last_seen,
+            theme
+        )
+        VALUES (?, 'everyone', 'friends', 'friends', 'friends', 'default')
+        """,
+        (user_id,),
+    )
+
+def get_settings(conn: sqlite3.Connection, user_id: int) -> dict:
+    ensure_settings(conn, user_id)
+    row = conn.execute("SELECT * FROM user_settings WHERE user_id = ?", (user_id,)).fetchone()
+    return dict(row)
+
+def is_friend(conn: sqlite3.Connection, a: int, b: int) -> bool:
+    row = conn.execute("SELECT 1 FROM friends WHERE user_id = ? AND friend_id = ?", (a, b)).fetchone()
+    return bool(row)
+
+def is_blocked(conn: sqlite3.Connection, blocker_id: int, blocked_id: int) -> bool:
+    row = conn.execute("SELECT 1 FROM blocked_users WHERE blocker_id = ? AND blocked_id = ?", (blocker_id, blocked_id)).fetchone()
+    return bool(row)
+
+def is_any_block(conn: sqlite3.Connection, a: int, b: int) -> bool:
+    return is_blocked(conn, a, b) or is_blocked(conn, b, a)
+
+def can_access_chat(conn: sqlite3.Connection, user_id: int, chat_id: int) -> bool:
+    row = conn.execute("SELECT 1 FROM chat_members WHERE user_id = ? AND chat_id = ?", (user_id, chat_id)).fetchone()
+    return bool(row)
+
+def get_chat(conn: sqlite3.Connection, chat_id: int) -> Optional[sqlite3.Row]:
+    return conn.execute("SELECT * FROM chats WHERE id = ?", (chat_id,)).fetchone()
+
+def get_chat_member(conn: sqlite3.Connection, chat_id: int, user_id: int) -> Optional[sqlite3.Row]:
+    return conn.execute(
+        "SELECT * FROM chat_members WHERE chat_id = ? AND user_id = ?",
+        (chat_id, user_id),
+    ).fetchone()
+
+def get_direct_peer(conn: sqlite3.Connection, chat_id: int, user_id: int) -> Optional[sqlite3.Row]:
+    return conn.execute(
+        "SELECT u.* FROM chat_members cm JOIN users u ON u.id = cm.user_id WHERE cm.chat_id = ? AND cm.user_id != ? LIMIT 1",
+        (chat_id, user_id),
+    ).fetchone()
+
+def can_call_user(conn: sqlite3.Connection, caller_id: int, target_id: int) -> tuple[bool, str]:
+    if is_any_block(conn, caller_id, target_id):
+        return False, "Звонок недоступен из-за блокировки"
+    target_settings = get_settings(conn, target_id)
+    mode = target_settings["allow_calls_from"]
+    if mode == "nobody":
+        return False, "Пользователь запретил звонки"
+    if mode == "friends" and not is_friend(conn, target_id, caller_id):
+        return False, "Пользователь принимает звонки только от друзей"
+    return True, ""
+
+def can_invite_to_group(conn: sqlite3.Connection, inviter_id: int, target_id: int) -> tuple[bool, str]:
+    if is_any_block(conn, inviter_id, target_id):
+        return False, "Приглашение недоступно из-за блокировки"
+    target_settings = get_settings(conn, target_id)
+    mode = target_settings["allow_group_invites"]
+    if mode == "nobody":
+        return False, "Пользователь запретил приглашения в группы"
+    if mode == "friends" and not is_friend(conn, target_id, inviter_id):
+        return False, "Пользователь принимает приглашения только от друзей"
+    return True, ""
+
+def serialize_message(row: sqlite3.Row) -> dict:
+    keys = row.keys()
+    return {
+        "id": row["id"],
+        "chat_id": row["chat_id"],
+        "user_id": row["user_id"],
+        "username": row["username"],
+        "nickname": row["nickname"],
+        "avatar": row["avatar"],
+        "kind": row["kind"],
+        "text": row["text"] or "",
+        "file_url": f"/media/{row['file_path']}" if row["file_path"] else None,
+        "file_name": row["file_name"],
+        "mime_type": row["mime_type"],
+        "created_at": row["created_at"],
+        "read_count": row["read_count"] if "read_count" in keys else 0,
+    }
+
+async def push_to_user(user_id: int, payload: dict):
+    connections = active_connections.get(user_id, set()).copy()
+    dead = []
+    for ws in connections:
+        try:
+            await ws.send_json(payload)
+        except Exception:
+            dead.append(ws)
+    for ws in dead:
+        active_connections.get(user_id, set()).discard(ws)
+
+async def broadcast_to_chat(chat_id: int, payload: dict):
+    conn = get_db()
+    members = conn.execute("SELECT user_id FROM chat_members WHERE chat_id = ?", (chat_id,)).fetchall()
+    conn.close()
+    for m in members:
+        await push_to_user(m["user_id"], payload)
+
+@app.get("/", response_class=HTMLResponse)
+async def index(request: Request):
+    response = templates.TemplateResponse("index.html", {"request": request})
+    response.headers["Permissions-Policy"] = "camera=(self), microphone=(self), display-capture=(self)"
+    return response
+
+@app.get("/api/rtc-config")
+async def rtc_config():
+    return {"ice_servers": ICE_SERVERS, "ice_policy": "all"}
+
+@app.get("/media/{file_name}")
+async def media_file(file_name: str, request: Request, token: str = ""):
+    user = None
+    if token:
+        user = get_user_by_token(token)
+    if not user:
+        auth = request.headers.get("Authorization", "")
+        if auth.startswith("Bearer "):
+            bearer = auth.replace("Bearer ", "", 1).strip()
+            user = get_user_by_token(bearer)
+    if not user:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    safe = Path(file_name).name
+    target = UPLOAD_DIR / safe
+    if not target.exists():
+        raise HTTPException(status_code=404, detail="Файл не найден")
+    payload = read_encrypted_file(target)
+    ctype = mimetypes.guess_type(safe)[0] or "application/octet-stream"
+    response = Response(content=payload, media_type=ctype)
+    response.headers["Permissions-Policy"] = "camera=(self), microphone=(self), display-capture=(self)"
+    return response
+
+@app.post("/api/gate")
+async def gate(data: GateIn):
+    return JSONResponse({"ok": True})
+
+@app.post("/api/register")
+async def register(data: RegisterIn, request: Request):
+    username = data.username.strip().lower()
+    nickname = data.nickname.strip()
+    if len(username) < 3 or len(username) > 32:
+        raise HTTPException(status_code=400, detail="Username: 3-32 символа")
+    if not username.replace("_", "").isalnum():
+        raise HTTPException(status_code=400, detail="Username: буквы, цифры, _")
+    if len(data.password) < 6:
+        raise HTTPException(status_code=400, detail="Пароль слишком короткий")
+    if not nickname:
+        raise HTTPException(status_code=400, detail="Укажите ник")
+    conn = get_db()
+    try:
+        with db_lock, conn:
+            conn.execute(
+                "INSERT INTO users(username, password_hash, nickname, created_at) VALUES (?, ?, ?, ?)",
+                (username, hash_password(data.password), nickname, now_iso()),
+            )
+            user = conn.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
+            ensure_settings(conn, user["id"])
+            token = secrets.token_urlsafe(32)
+            conn.execute(
+                "INSERT INTO sessions(token, user_id, created_at) VALUES (?, ?, ?)",
+                (token, user["id"], now_iso()),
+            )
+    except sqlite3.IntegrityError:
+        conn.close()
+        raise HTTPException(status_code=409, detail="Username уже занят")
+    conn.close()
+    return {"token": token, "user": serialize_user(user)}
+
+@app.post("/api/login")
+async def login(data: LoginIn, request: Request):
+    conn = get_db()
+    user = conn.execute("SELECT * FROM users WHERE username = ?", (data.username.strip().lower(),)).fetchone()
+    if not user or not verify_password(data.password, user["password_hash"]):
+        conn.close()
+        raise HTTPException(status_code=401, detail="Неверный логин или пароль")
+    ensure_settings(conn, user["id"])
+    token = secrets.token_urlsafe(32)
+    with db_lock, conn:
+        conn.execute(
+            "INSERT INTO sessions(token, user_id, created_at) VALUES (?, ?, ?)",
+            (token, user["id"], now_iso()),
+        )
+    conn.close()
+    return {"token": token, "user": serialize_user(user)}
+
+@app.post("/api/logout")
+async def logout(request: Request):
+    auth = request.headers.get("Authorization", "")
+    if auth.startswith("Bearer "):
+        token = auth.replace("Bearer ", "", 1).strip()
+        conn = get_db()
+        with db_lock, conn:
+            conn.execute("DELETE FROM sessions WHERE token = ?", (token,))
+        conn.close()
+    return {"ok": True}
+
+@app.delete("/api/account")
+async def delete_account(user=Depends(get_current_user)):
+    user_id = user["id"]
+    conn = get_db()
+    with db_lock, conn:
+        owned = conn.execute("SELECT id, type FROM chats WHERE created_by = ?", (user_id,)).fetchall()
+        for ch in owned:
+            new_owner = conn.execute(
+                "SELECT user_id FROM chat_members WHERE chat_id = ? AND user_id != ? ORDER BY user_id LIMIT 1",
+                (ch["id"], user_id),
+            ).fetchone()
+            if new_owner:
+                conn.execute("UPDATE chats SET created_by = ? WHERE id = ?", (new_owner["user_id"], ch["id"]))
+                if ch["type"] == "group":
+                    conn.execute("UPDATE chat_members SET role = 'owner' WHERE chat_id = ? AND user_id = ?", (ch["id"], new_owner["user_id"]))
+            else:
+                conn.execute("DELETE FROM chats WHERE id = ?", (ch["id"],))
+        conn.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
+        conn.execute("DELETE FROM chat_members WHERE user_id = ?", (user_id,))
+        conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+    conn.close()
+    for ws in active_connections.get(user_id, set()).copy():
+        try:
+            await ws.close(code=1000)
+        except Exception:
+            pass
+    active_connections.pop(user_id, None)
+    return {"ok": True}
+
+@app.get("/api/me")
+async def me(user=Depends(get_current_user)):
+    return serialize_user(user)
+
+@app.post("/api/account/password")
+async def change_password(data: PasswordChangeIn, user=Depends(get_current_user)):
+    if len(data.new_password or "") < 6:
+        raise HTTPException(status_code=400, detail="Новый пароль слишком короткий")
+    conn = get_db()
+    fresh = conn.execute("SELECT id, password_hash FROM users WHERE id = ?", (user["id"],)).fetchone()
+    if not fresh or not verify_password(data.old_password, fresh["password_hash"]):
+        conn.close()
+        raise HTTPException(status_code=400, detail="Старый пароль неверный")
+    with db_lock, conn:
+        conn.execute("UPDATE users SET password_hash = ? WHERE id = ?", (hash_password(data.new_password), user["id"]))
+    conn.close()
+    return {"ok": True}
+
+@app.get("/api/settings")
+async def get_my_settings(user=Depends(get_current_user)):
+    conn = get_db()
+    settings = get_settings(conn, user["id"])
+    conn.close()
+    return settings
+
+@app.post("/api/settings")
+async def update_settings(data: SettingsIn, user=Depends(get_current_user)):
+    payload = data.model_dump()
+    for key, value in payload.items():
+        if value not in VALID_SETTING_VALUES[key]:
+            raise HTTPException(status_code=400, detail=f"Неверное значение {key}")
+
+    conn = get_db()
+    with db_lock, conn:
+        ensure_settings(conn, user["id"])
+        conn.execute(
+            """
+            UPDATE user_settings
+            SET allow_friend_requests = ?,
+                allow_calls_from = ?,
+                allow_group_invites = ?,
+                show_last_seen = ?,
+                theme = ?
+            WHERE user_id = ?
+            """,
+            (
+                payload["allow_friend_requests"],
+                payload["allow_calls_from"],
+                payload["allow_group_invites"],
+                payload["show_last_seen"],
+                payload["theme"],
+                user["id"],
+            ),
+        )
+        settings = get_settings(conn, user["id"])
+    conn.close()
+    return settings
+
+@app.get("/api/blocks")
+async def list_blocks(user=Depends(get_current_user)):
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT u.id, u.username, u.nickname, u.avatar FROM blocked_users b JOIN users u ON u.id = b.blocked_id WHERE b.blocker_id = ? ORDER BY b.created_at DESC",
+        (user["id"],),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+@app.post("/api/users/{target_id}/block")
+async def block_user(target_id: int, user=Depends(get_current_user)):
+    if target_id == user["id"]:
+        raise HTTPException(status_code=400, detail="Нельзя блокировать себя")
+    conn = get_db()
+    target = conn.execute("SELECT id FROM users WHERE id = ?", (target_id,)).fetchone()
+    if not target:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Пользователь не найден")
+    with db_lock, conn:
+        conn.execute("INSERT OR IGNORE INTO blocked_users(blocker_id, blocked_id, created_at) VALUES (?, ?, ?)", (user["id"], target_id, now_iso()))
+        conn.execute("DELETE FROM friends WHERE (user_id = ? AND friend_id = ?) OR (user_id = ? AND friend_id = ?)", (user["id"], target_id, target_id, user["id"]))
+        conn.execute("DELETE FROM friend_requests WHERE (from_user_id = ? AND to_user_id = ?) OR (from_user_id = ? AND to_user_id = ?)", (user["id"], target_id, target_id, user["id"]))
+    conn.close()
+    await push_to_user(target_id, {"type": "user:blocked", "payload": {"by": user["id"]}})
+    return {"ok": True}
+
+@app.delete("/api/users/{target_id}/block")
+async def unblock_user(target_id: int, user=Depends(get_current_user)):
+    conn = get_db()
+    with db_lock, conn:
+        conn.execute("DELETE FROM blocked_users WHERE blocker_id = ? AND blocked_id = ?", (user["id"], target_id))
+    conn.close()
+    return {"ok": True}
+
+@app.post("/api/profile")
+async def update_profile(data: ProfileIn, user=Depends(get_current_user)):
+    nickname = data.nickname.strip()
+    if not nickname:
+        raise HTTPException(status_code=400, detail="Ник не может быть пустым")
+    conn = get_db()
+    with db_lock, conn:
+        conn.execute("UPDATE users SET nickname = ?, about = ? WHERE id = ?", (nickname, data.about.strip()[:250], user["id"]))
+        updated = conn.execute("SELECT * FROM users WHERE id = ?", (user["id"],)).fetchone()
+    conn.close()
+    return serialize_user(updated)
+
+@app.post("/api/profile/avatar")
+async def upload_avatar(file: UploadFile = File(...), user=Depends(get_current_user)):
+    ext = Path(file.filename or "avatar.png").suffix or ".png"
+    name = f"avatar_{user['id']}_{uuid.uuid4().hex}{ext}"
+    target = UPLOAD_DIR / name
+    content = await file.read()
+    if len(content) > 7 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Файл до 7MB")
+    write_encrypted_file(target, content)
+    conn = get_db()
+    with db_lock, conn:
+        conn.execute("UPDATE users SET avatar = ? WHERE id = ?", (name, user["id"]))
+        updated = conn.execute("SELECT * FROM users WHERE id = ?", (user["id"],)).fetchone()
+    conn.close()
+    return serialize_user(updated)
+
+@app.post("/api/groups/{chat_id}/avatar")
+async def upload_group_avatar(chat_id: int, file: UploadFile = File(...), user=Depends(get_current_user)):
+    conn = get_db()
+    chat = get_chat(conn, chat_id)
+    if not chat or chat["type"] != "group":
+        conn.close()
+        raise HTTPException(status_code=404, detail="Группа не найдена")
+    member = get_chat_member(conn, chat_id, user["id"])
+    if not member:
+        conn.close()
+        raise HTTPException(status_code=403, detail="Нет доступа")
+    if member["role"] not in {"owner", "admin"}:
+        conn.close()
+        raise HTTPException(status_code=403, detail="Менять аватар группы могут owner/admin")
+    payload = await file.read()
+    if len(payload) > 7 * 1024 * 1024:
+        conn.close()
+        raise HTTPException(status_code=400, detail="Файл до 7MB")
+    ext = Path(file.filename or "group_avatar.png").suffix or ".png"
+    name = f"group_avatar_{chat_id}_{uuid.uuid4().hex}{ext}"
+    write_encrypted_file(UPLOAD_DIR / name, payload)
+    with db_lock, conn:
+        conn.execute("UPDATE chats SET avatar = ? WHERE id = ?", (name, chat_id))
+    conn.close()
+    return {"ok": True, "avatar": name, "file_url": f"/media/{name}"}
+
+@app.get("/api/users/search")
+async def search_users(q: str = "", user=Depends(get_current_user)):
+    q = q.strip().lower()
+    if len(q) < 2:
+        return []
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT id, username, nickname, avatar, about FROM users WHERE id != ? AND (username LIKE ? OR nickname LIKE ?) AND NOT EXISTS (SELECT 1 FROM blocked_users b WHERE (b.blocker_id = ? AND b.blocked_id = users.id) OR (b.blocker_id = users.id AND b.blocked_id = ?)) LIMIT 20",
+        (user["id"], f"%{q}%", f"%{q}%", user["id"], user["id"]),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+@app.get("/api/users/{target_id}")
+async def get_user_profile(target_id: int, user=Depends(get_current_user)):
+    conn = get_db()
+    target = conn.execute(
+        "SELECT id, username, nickname, avatar, about FROM users WHERE id = ?",
+        (target_id,),
+    ).fetchone()
+    if not target:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Пользователь не найден")
+
+    is_self = target_id == user["id"]
+    blocked_by_me = is_blocked(conn, user["id"], target_id) if not is_self else False
+    blocked_by_target = is_blocked(conn, target_id, user["id"]) if not is_self else False
+    if blocked_by_target:
+        conn.close()
+        raise HTTPException(status_code=403, detail="Профиль недоступен")
+
+    is_friend_with_me = is_friend(conn, user["id"], target_id) if not is_self else False
+    outgoing_request = None
+    incoming_request = None
+    can_send_friend_request = False
+
+    if not is_self and not blocked_by_me:
+        outgoing_request = conn.execute(
+            "SELECT id FROM friend_requests WHERE from_user_id = ? AND to_user_id = ? AND status = 'pending' ORDER BY id DESC LIMIT 1",
+            (user["id"], target_id),
+        ).fetchone()
+        incoming_request = conn.execute(
+            "SELECT id FROM friend_requests WHERE from_user_id = ? AND to_user_id = ? AND status = 'pending' ORDER BY id DESC LIMIT 1",
+            (target_id, user["id"]),
+        ).fetchone()
+        if not is_friend_with_me and not outgoing_request and not incoming_request:
+            target_settings = get_settings(conn, target_id)
+            can_send_friend_request = target_settings["allow_friend_requests"] == "everyone"
+
+    profile = serialize_user(target)
+    profile.update(
+        {
+            "is_self": is_self,
+            "is_friend": is_friend_with_me,
+            "blocked_by_me": blocked_by_me,
+            "blocked_by_target": blocked_by_target,
+            "outgoing_request_id": outgoing_request["id"] if outgoing_request else None,
+            "incoming_request_id": incoming_request["id"] if incoming_request else None,
+            "can_send_friend_request": can_send_friend_request,
+            "can_open_direct": bool(is_friend_with_me and not blocked_by_me and not blocked_by_target),
+        }
+    )
+    conn.close()
+    return profile
+
+@app.get("/api/assets")
+async def list_assets(kind: str = "", user=Depends(get_current_user)):
+    conn = get_db()
+    params: list = [user["id"]]
+    query = "SELECT id, kind, title, file_path, file_name, mime_type, created_at FROM custom_assets WHERE user_id = ?"
+    if kind in {"emoji", "sticker"}:
+        query += " AND kind = ?"
+        params.append(kind)
+    query += " ORDER BY id DESC"
+    rows = conn.execute(query, params).fetchall()
+    conn.close()
+    return [
+        {
+            "id": r["id"],
+            "kind": r["kind"],
+            "title": r["title"] or "",
+            "file_url": f"/media/{r['file_path']}",
+            "file_name": r["file_name"],
+            "mime_type": r["mime_type"],
+            "created_at": r["created_at"],
+        }
+        for r in rows
+    ]
+
+@app.post("/api/assets")
+async def upload_asset(kind: str = Form(...), title: str = Form(""), file: UploadFile = File(...), user=Depends(get_current_user)):
+    if kind not in {"emoji", "sticker"}:
+        raise HTTPException(status_code=400, detail="kind должен быть emoji или sticker")
+    payload = await file.read()
+    max_size = 2 * 1024 * 1024 if kind == "emoji" else 6 * 1024 * 1024
+    if len(payload) > max_size:
+        raise HTTPException(status_code=400, detail=f"Слишком большой файл (до {max_size // (1024*1024)}MB)")
+    ext = Path(file.filename or "asset.bin").suffix
+    safe_name = f"asset_{user['id']}_{uuid.uuid4().hex}{ext}"
+    write_encrypted_file(UPLOAD_DIR / safe_name, payload)
+    conn = get_db()
+    with db_lock, conn:
+        cur = conn.execute(
+            "INSERT INTO custom_assets(user_id, kind, title, file_path, file_name, mime_type, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (user["id"], kind, title.strip()[:40], safe_name, file.filename, file.content_type, now_iso()),
+        )
+        aid = cur.lastrowid
+        row = conn.execute("SELECT id, kind, title, file_path, file_name, mime_type, created_at FROM custom_assets WHERE id = ?", (aid,)).fetchone()
+    conn.close()
+    return {
+        "id": row["id"],
+        "kind": row["kind"],
+        "title": row["title"] or "",
+        "file_url": f"/media/{row['file_path']}",
+        "file_name": row["file_name"],
+        "mime_type": row["mime_type"],
+        "created_at": row["created_at"],
+    }
+
+@app.delete("/api/assets/{asset_id}")
+async def delete_asset(asset_id: int, user=Depends(get_current_user)):
+    conn = get_db()
+    row = conn.execute("SELECT id, file_path FROM custom_assets WHERE id = ? AND user_id = ?", (asset_id, user["id"])).fetchone()
+    if not row:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Стикер/эмодзи не найден")
+    with db_lock, conn:
+        conn.execute("DELETE FROM custom_assets WHERE id = ?", (asset_id,))
+    conn.close()
+    return {"ok": True}
+
+@app.post("/api/friends/request")
+async def send_friend_request(data: FriendRequestIn, user=Depends(get_current_user)):
+    username = data.username.strip().lower()
+    conn = get_db()
+    target = conn.execute("SELECT id FROM users WHERE username = ?", (username,)).fetchone()
+    if not target:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Пользователь не найден")
+    if target["id"] == user["id"]:
+        conn.close()
+        raise HTTPException(status_code=400, detail="Нельзя добавить себя")
+    if is_any_block(conn, user["id"], target["id"]):
+        conn.close()
+        raise HTTPException(status_code=403, detail="Нельзя отправить заявку из-за блокировки")
+    target_settings = get_settings(conn, target["id"])
+    if target_settings["allow_friend_requests"] == "nobody":
+        conn.close()
+        raise HTTPException(status_code=403, detail="Пользователь запретил заявки в друзья")
+    existing_friend = conn.execute("SELECT 1 FROM friends WHERE user_id = ? AND friend_id = ?", (user["id"], target["id"])).fetchone()
+    if existing_friend:
+        conn.close()
+        return {"ok": True, "message": "Уже в друзьях"}
+    with db_lock, conn:
+        conn.execute("INSERT OR IGNORE INTO friend_requests(from_user_id, to_user_id, status, created_at) VALUES (?, ?, 'pending', ?)", (user["id"], target["id"], now_iso()))
+    req = conn.execute("SELECT fr.id, u.username, u.nickname, u.avatar FROM friend_requests fr JOIN users u ON u.id = fr.from_user_id WHERE fr.from_user_id = ? AND fr.to_user_id = ? AND fr.status = 'pending'", (user["id"], target["id"])).fetchone()
+    conn.close()
+    if req:
+        await push_to_user(target["id"], {"type": "friend:request", "payload": dict(req)})
+    return {"ok": True}
+
+@app.get("/api/friends/requests")
+async def incoming_requests(user=Depends(get_current_user)):
+    conn = get_db()
+    rows = conn.execute("SELECT fr.id, fr.created_at, u.id as user_id, u.username, u.nickname, u.avatar FROM friend_requests fr JOIN users u ON u.id = fr.from_user_id WHERE fr.to_user_id = ? AND fr.status = 'pending' ORDER BY fr.id DESC", (user["id"],)).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+@app.post("/api/friends/request/{request_id}/accept")
+async def accept_request(request_id: int, user=Depends(get_current_user)):
+    conn = get_db()
+    req = conn.execute("SELECT * FROM friend_requests WHERE id = ? AND to_user_id = ? AND status = 'pending'", (request_id, user["id"])).fetchone()
+    if not req:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Заявка не найдена")
+    if is_any_block(conn, user["id"], req["from_user_id"]):
+        conn.close()
+        raise HTTPException(status_code=403, detail="Нельзя принять заявку из-за блокировки")
+    with db_lock, conn:
+        conn.execute("UPDATE friend_requests SET status = 'accepted' WHERE id = ?", (request_id,))
+        conn.execute("INSERT OR IGNORE INTO friends(user_id, friend_id, created_at) VALUES (?, ?, ?)", (user["id"], req["from_user_id"], now_iso()))
+        conn.execute("INSERT OR IGNORE INTO friends(user_id, friend_id, created_at) VALUES (?, ?, ?)", (req["from_user_id"], user["id"], now_iso()))
+    conn.close()
+    await push_to_user(req["from_user_id"], {"type": "friend:accepted", "payload": {"by": user["username"]}})
+    return {"ok": True}
+
+@app.post("/api/friends/request/{request_id}/reject")
+async def reject_request(request_id: int, user=Depends(get_current_user)):
+    conn = get_db()
+    with db_lock, conn:
+        conn.execute("UPDATE friend_requests SET status = 'rejected' WHERE id = ? AND to_user_id = ?", (request_id, user["id"]))
+    conn.close()
+    return {"ok": True}
+
+@app.get("/api/friends")
+async def list_friends(user=Depends(get_current_user)):
+    conn = get_db()
+    rows = conn.execute("SELECT u.id, u.username, u.nickname, u.avatar, u.about FROM friends f JOIN users u ON u.id = f.friend_id WHERE f.user_id = ? AND NOT EXISTS (SELECT 1 FROM blocked_users b WHERE (b.blocker_id = ? AND b.blocked_id = f.friend_id) OR (b.blocker_id = f.friend_id AND b.blocked_id = ?)) ORDER BY u.nickname", (user["id"], user["id"], user["id"])).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+@app.post("/api/chats/direct")
+async def open_direct(data: DirectIn, user=Depends(get_current_user)):
+    conn = get_db()
+    if is_any_block(conn, user["id"], data.user_id):
+        conn.close()
+        raise HTTPException(status_code=403, detail="Чат недоступен из-за блокировки")
+    friend = conn.execute("SELECT 1 FROM friends WHERE user_id = ? AND friend_id = ?", (user["id"], data.user_id)).fetchone()
+    if not friend:
+        conn.close()
+        raise HTTPException(status_code=403, detail="Только для друзей")
+    existing = conn.execute("SELECT c.id FROM chats c JOIN chat_members m1 ON m1.chat_id = c.id AND m1.user_id = ? JOIN chat_members m2 ON m2.chat_id = c.id AND m2.user_id = ? WHERE c.type = 'direct'", (user["id"], data.user_id)).fetchone()
+    if existing:
+        conn.close()
+        return {"chat_id": existing["id"]}
+    with db_lock, conn:
+        cursor = conn.execute("INSERT INTO chats(type, title, created_by, created_at) VALUES ('direct', NULL, ?, ?)", (user["id"], now_iso()))
+        chat_id = cursor.lastrowid
+        conn.execute("INSERT INTO chat_members(chat_id, user_id, role, joined_at) VALUES (?, ?, 'member', ?)", (chat_id, user["id"], now_iso()))
+        conn.execute("INSERT INTO chat_members(chat_id, user_id, role, joined_at) VALUES (?, ?, 'member', ?)", (chat_id, data.user_id, now_iso()))
+    conn.close()
+    return {"chat_id": chat_id}
+
+@app.post("/api/groups")
+async def create_group(data: GroupIn, user=Depends(get_current_user)):
+    title = data.title.strip()[:80]
+    if len(title) < 2:
+        raise HTTPException(status_code=400, detail="Название группы слишком короткое")
+    conn = get_db()
+    usernames = {
+        str(member).strip().lower().lstrip("@")
+        for member in data.members
+        if str(member).strip()
+    }
+    pending_invites: list[dict] = []
+    invited_usernames: list[str] = []
+    with db_lock, conn:
+        cursor = conn.execute("INSERT INTO chats(type, title, created_by, created_at) VALUES ('group', ?, ?, ?)", (title, user["id"], now_iso()))
+        chat_id = cursor.lastrowid
+        conn.execute(
+            "INSERT OR IGNORE INTO chat_members(chat_id, user_id, role, joined_at) VALUES (?, ?, 'owner', ?)",
+            (chat_id, user["id"], now_iso()),
+        )
+        for username in usernames:
+            target = conn.execute(
+                "SELECT id, username, nickname FROM users WHERE username = ?",
+                (username,),
+            ).fetchone()
+            if not target or target["id"] == user["id"]:
+                continue
+            if not is_friend(conn, user["id"], target["id"]):
+                continue
+            allowed, _ = can_invite_to_group(conn, user["id"], target["id"])
+            if not allowed:
+                continue
+            conn.execute(
+                "INSERT OR IGNORE INTO group_invites(chat_id, inviter_id, invitee_id, status, created_at) VALUES (?, ?, ?, 'pending', ?)",
+                (chat_id, user["id"], target["id"], now_iso()),
+            )
+            invite = conn.execute(
+                "SELECT gi.id, gi.chat_id, gi.inviter_id, gi.invitee_id, gi.status, gi.created_at, c.title as chat_title, u.username as inviter_username, u.nickname as inviter_nickname "
+                "FROM group_invites gi "
+                "JOIN chats c ON c.id = gi.chat_id "
+                "JOIN users u ON u.id = gi.inviter_id "
+                "WHERE gi.chat_id = ? AND gi.invitee_id = ? AND gi.status = 'pending' "
+                "ORDER BY gi.id DESC LIMIT 1",
+                (chat_id, target["id"]),
+            ).fetchone()
+            if invite:
+                pending_invites.append(dict(invite))
+                invited_usernames.append(target["username"])
+    conn.close()
+    for invite in pending_invites:
+        await push_to_user(invite["invitee_id"], {"type": "group:invite", "payload": invite})
+    return {"chat_id": chat_id, "invited": invited_usernames}
+
+@app.delete("/api/groups/{chat_id}")
+async def delete_group(chat_id: int, user=Depends(get_current_user)):
+    conn = get_db()
+    chat = get_chat(conn, chat_id)
+    if not chat or chat["type"] != "group":
+        conn.close()
+        raise HTTPException(status_code=404, detail="Группа не найдена")
+    if chat["created_by"] != user["id"]:
+        conn.close()
+        raise HTTPException(status_code=403, detail="Удалить группу может только создатель")
+    members = conn.execute("SELECT user_id FROM chat_members WHERE chat_id = ?", (chat_id,)).fetchall()
+    with db_lock, conn:
+        conn.execute("DELETE FROM chats WHERE id = ?", (chat_id,))
+    conn.close()
+    for m in members:
+        await push_to_user(m["user_id"], {"type": "group:deleted", "payload": {"chat_id": chat_id}})
+    return {"ok": True}
+
+@app.post("/api/chats/{chat_id}/leave")
+async def leave_chat(chat_id: int, user=Depends(get_current_user)):
+    conn = get_db()
+    chat = get_chat(conn, chat_id)
+    if not chat:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Чат не найден")
+    member = conn.execute(
+        "SELECT role FROM chat_members WHERE chat_id = ? AND user_id = ?",
+        (chat_id, user["id"]),
+    ).fetchone()
+    if not member:
+        conn.close()
+        raise HTTPException(status_code=403, detail="Нет доступа")
+
+    new_owner_id = None
+    with db_lock, conn:
+        conn.execute("DELETE FROM chat_members WHERE chat_id = ? AND user_id = ?", (chat_id, user["id"]))
+        remaining = conn.execute(
+            "SELECT user_id FROM chat_members WHERE chat_id = ? ORDER BY user_id LIMIT 1",
+            (chat_id,),
+        ).fetchone()
+
+        if chat["type"] == "direct":
+            conn.execute("DELETE FROM chats WHERE id = ?", (chat_id,))
+        elif not remaining:
+            conn.execute("DELETE FROM chats WHERE id = ?", (chat_id,))
+        elif chat["created_by"] == user["id"]:
+            new_owner_id = remaining["user_id"]
+            conn.execute("UPDATE chats SET created_by = ? WHERE id = ?", (new_owner_id, chat_id))
+            conn.execute(
+                "UPDATE chat_members SET role = 'owner' WHERE chat_id = ? AND user_id = ?",
+                (chat_id, new_owner_id),
+            )
+    conn.close()
+    return {"ok": True, "new_owner_id": new_owner_id}
+
+@app.post("/api/groups/{chat_id}/invite")
+async def invite_group_member(chat_id: int, data: DirectIn, user=Depends(get_current_user)):
+    conn = get_db()
+    chat = get_chat(conn, chat_id)
+    if not chat or chat["type"] != "group":
+        conn.close()
+        raise HTTPException(status_code=404, detail="Группа не найдена")
+    role = conn.execute("SELECT role FROM chat_members WHERE chat_id = ? AND user_id = ?", (chat_id, user["id"])).fetchone()
+    if not role:
+        conn.close()
+        raise HTTPException(status_code=403, detail="Нет доступа")
+    if role["role"] not in {"owner", "admin"}:
+        conn.close()
+        raise HTTPException(status_code=403, detail="Приглашать могут owner/admin")
+    already = conn.execute("SELECT 1 FROM chat_members WHERE chat_id = ? AND user_id = ?", (chat_id, data.user_id)).fetchone()
+    if already:
+        conn.close()
+        return {"ok": True, "message": "Уже в группе"}
+    if not is_friend(conn, user["id"], data.user_id):
+        conn.close()
+        raise HTTPException(status_code=400, detail="Можно пригласить только друга")
+    allowed, reason = can_invite_to_group(conn, user["id"], data.user_id)
+    if not allowed:
+        conn.close()
+        raise HTTPException(status_code=403, detail=reason)
+    with db_lock, conn:
+        conn.execute("INSERT OR IGNORE INTO chat_members(chat_id, user_id, role, joined_at) VALUES (?, ?, 'member', ?)", (chat_id, data.user_id, now_iso()))
+    conn.close()
+    await push_to_user(data.user_id, {"type": "chat:added", "payload": {"chat_id": chat_id}})
+    await broadcast_to_chat(chat_id, {"type": "group:member_added", "payload": {"chat_id": chat_id, "user_id": data.user_id}})
+    return {"ok": True}
+
+@app.delete("/api/groups/{chat_id}/members/{target_user_id}")
+async def kick_group_member(chat_id: int, target_user_id: int, user=Depends(get_current_user)):
+    conn = get_db()
+    chat = get_chat(conn, chat_id)
+    if not chat or chat["type"] != "group":
+        conn.close()
+        raise HTTPException(status_code=404, detail="Группа не найдена")
+    actor = get_chat_member(conn, chat_id, user["id"])
+    target = get_chat_member(conn, chat_id, target_user_id)
+    if not actor or not target:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Участник не найден")
+    if target_user_id == user["id"]:
+        conn.close()
+        raise HTTPException(status_code=400, detail="Используйте выход из группы")
+    actor_role = actor["role"]
+    target_role = target["role"]
+    allowed = False
+    if actor_role == "owner" and target_role in {"member", "admin"}:
+        allowed = True
+    if actor_role == "admin" and target_role == "member":
+        allowed = True
+    if not allowed:
+        conn.close()
+        raise HTTPException(status_code=403, detail="Недостаточно прав для исключения участника")
+    with db_lock, conn:
+        conn.execute("DELETE FROM chat_members WHERE chat_id = ? AND user_id = ?", (chat_id, target_user_id))
+    conn.close()
+    payload = {"chat_id": chat_id, "user_id": target_user_id}
+    await push_to_user(target_user_id, {"type": "group:member_removed", "payload": payload})
+    await broadcast_to_chat(chat_id, {"type": "group:member_removed", "payload": payload})
+    return {"ok": True}
+
+@app.post("/api/groups/{chat_id}/members/{target_user_id}/role")
+async def update_group_member_role(chat_id: int, target_user_id: int, data: MemberRoleIn, user=Depends(get_current_user)):
+    new_role = data.role.strip().lower()
+    if new_role not in {"member", "admin", "owner"}:
+        raise HTTPException(status_code=400, detail="Недопустимая роль")
+    conn = get_db()
+    chat = get_chat(conn, chat_id)
+    if not chat or chat["type"] != "group":
+        conn.close()
+        raise HTTPException(status_code=404, detail="Группа не найдена")
+    actor = get_chat_member(conn, chat_id, user["id"])
+    target = get_chat_member(conn, chat_id, target_user_id)
+    if not actor or actor["role"] != "owner":
+        conn.close()
+        raise HTTPException(status_code=403, detail="Управлять ролями может только owner")
+    if not target:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Участник не найден")
+    if target_user_id == user["id"]:
+        conn.close()
+        raise HTTPException(status_code=400, detail="Нельзя менять свою роль этим действием")
+    if new_role != "owner" and target["role"] == "owner":
+        conn.close()
+        raise HTTPException(status_code=400, detail="Сначала передайте owner другому участнику")
+    role_updates = [(target_user_id, new_role)]
+    with db_lock, conn:
+        if new_role == "owner":
+            conn.execute("UPDATE chats SET created_by = ? WHERE id = ?", (target_user_id, chat_id))
+            conn.execute("UPDATE chat_members SET role = 'admin' WHERE chat_id = ? AND user_id = ?", (chat_id, user["id"]))
+            conn.execute("UPDATE chat_members SET role = 'owner' WHERE chat_id = ? AND user_id = ?", (chat_id, target_user_id))
+            role_updates.append((user["id"], "admin"))
+        else:
+            conn.execute("UPDATE chat_members SET role = ? WHERE chat_id = ? AND user_id = ?", (new_role, chat_id, target_user_id))
+    conn.close()
+    for uid, role in role_updates:
+        await broadcast_to_chat(chat_id, {"type": "group:member_role", "payload": {"chat_id": chat_id, "user_id": uid, "role": role}})
+    return {"ok": True}
+
+@app.post("/api/groups/{chat_id}/invite/username")
+async def invite_group_member_by_username(chat_id: int, data: UsernameIn, user=Depends(get_current_user)):
+    username = data.username.strip().lower().lstrip("@")
+    if not username:
+        raise HTTPException(status_code=400, detail="Укажите username")
+    conn = get_db()
+    target = conn.execute("SELECT id, username, nickname FROM users WHERE username = ?", (username,)).fetchone()
+    if not target:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Пользователь не найден")
+    chat = get_chat(conn, chat_id)
+    if not chat or chat["type"] != "group":
+        conn.close()
+        raise HTTPException(status_code=404, detail="Группа не найдена")
+    role = conn.execute("SELECT role FROM chat_members WHERE chat_id = ? AND user_id = ?", (chat_id, user["id"])).fetchone()
+    if not role:
+        conn.close()
+        raise HTTPException(status_code=403, detail="Нет доступа")
+    if role["role"] not in {"owner", "admin"}:
+        conn.close()
+        raise HTTPException(status_code=403, detail="Приглашать могут owner/admin")
+    if target["id"] == user["id"]:
+        conn.close()
+        raise HTTPException(status_code=400, detail="Нельзя приглашать себя")
+    already = conn.execute("SELECT 1 FROM chat_members WHERE chat_id = ? AND user_id = ?", (chat_id, target["id"])).fetchone()
+    if already:
+        conn.close()
+        return {"ok": True, "message": "Уже в группе"}
+    if not is_friend(conn, user["id"], target["id"]):
+        conn.close()
+        raise HTTPException(status_code=400, detail="Можно пригласить только друга")
+    allowed, reason = can_invite_to_group(conn, user["id"], target["id"])
+    if not allowed:
+        conn.close()
+        raise HTTPException(status_code=403, detail=reason)
+    with db_lock, conn:
+        conn.execute("INSERT OR IGNORE INTO group_invites(chat_id, inviter_id, invitee_id, status, created_at) VALUES (?, ?, ?, 'pending', ?)", (chat_id, user["id"], target["id"], now_iso()))
+        invite = conn.execute("SELECT gi.id, gi.chat_id, gi.inviter_id, gi.invitee_id, gi.status, gi.created_at, c.title as chat_title, u.username as inviter_username, u.nickname as inviter_nickname FROM group_invites gi JOIN chats c ON c.id = gi.chat_id JOIN users u ON u.id = gi.inviter_id WHERE gi.chat_id = ? AND gi.invitee_id = ? AND gi.status = 'pending' ORDER BY gi.id DESC LIMIT 1", (chat_id, target["id"])).fetchone()
+    conn.close()
+    if invite:
+        await push_to_user(target["id"], {"type": "group:invite", "payload": dict(invite)})
+    return {"ok": True}
+
+@app.get("/api/groups/invites")
+async def group_invites(user=Depends(get_current_user)):
+    conn = get_db()
+    rows = conn.execute("SELECT gi.id, gi.chat_id, gi.inviter_id, gi.invitee_id, gi.status, gi.created_at, c.title as chat_title, u.username as inviter_username, u.nickname as inviter_nickname FROM group_invites gi JOIN chats c ON c.id = gi.chat_id JOIN users u ON u.id = gi.inviter_id WHERE gi.invitee_id = ? AND gi.status = 'pending' ORDER BY gi.id DESC", (user["id"],)).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+@app.post("/api/groups/invites/{invite_id}/accept")
+async def accept_group_invite(invite_id: int, user=Depends(get_current_user)):
+    conn = get_db()
+    invite = conn.execute("SELECT * FROM group_invites WHERE id = ? AND invitee_id = ? AND status = 'pending'", (invite_id, user["id"])).fetchone()
+    if not invite:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Приглашение не найдено")
+    chat = get_chat(conn, invite["chat_id"])
+    if not chat or chat["type"] != "group":
+        conn.close()
+        raise HTTPException(status_code=404, detail="Группа не найдена")
+    with db_lock, conn:
+        conn.execute("UPDATE group_invites SET status = 'accepted' WHERE id = ?", (invite_id,))
+        conn.execute("INSERT OR IGNORE INTO chat_members(chat_id, user_id, role, joined_at) VALUES (?, ?, 'member', ?)", (invite["chat_id"], user["id"], now_iso()))
+    conn.close()
+    await push_to_user(invite["inviter_id"], {"type": "group:invite_answer", "payload": {"invite_id": invite_id, "accepted": True}})
+    await push_to_user(user["id"], {"type": "chat:added", "payload": {"chat_id": invite["chat_id"]}})
+    return {"ok": True}
+
+@app.post("/api/groups/invites/{invite_id}/reject")
+async def reject_group_invite(invite_id: int, user=Depends(get_current_user)):
+    conn = get_db()
+    with db_lock, conn:
+        invite = conn.execute("SELECT * FROM group_invites WHERE id = ? AND invitee_id = ? AND status = 'pending'", (invite_id, user["id"])).fetchone()
+        if not invite:
+            conn.close()
+            raise HTTPException(status_code=404, detail="Приглашение не найдено")
+        conn.execute("UPDATE group_invites SET status = 'rejected' WHERE id = ?", (invite_id,))
+    conn.close()
+    await push_to_user(invite["inviter_id"], {"type": "group:invite_answer", "payload": {"invite_id": invite_id, "accepted": False}})
+    return {"ok": True}
+
+@app.get("/api/chats")
+async def get_chats(user=Depends(get_current_user)):
+    conn = get_db()
+    rows = conn.execute("SELECT c.id, c.type, c.title, c.avatar, c.created_by, (SELECT m.text FROM messages m WHERE m.chat_id = c.id ORDER BY m.id DESC LIMIT 1) as last_text, (SELECT m.created_at FROM messages m WHERE m.chat_id = c.id ORDER BY m.id DESC LIMIT 1) as last_at FROM chats c JOIN chat_members cm ON cm.chat_id = c.id WHERE cm.user_id = ? ORDER BY COALESCE(last_at, c.created_at) DESC", (user["id"],)).fetchall()
+    items = []
+    for r in rows:
+        item = dict(r)
+        if item["type"] == "direct":
+            peer = conn.execute("SELECT u.id, u.username, u.nickname, u.avatar FROM chat_members cm JOIN users u ON u.id = cm.user_id WHERE cm.chat_id = ? AND cm.user_id != ? LIMIT 1", (item["id"], user["id"])).fetchone()
+            if not peer:
+                continue
+            if is_any_block(conn, user["id"], peer["id"]):
+                continue
+            item["title"] = peer["nickname"]
+            item["peer"] = dict(peer)
+            can_call, _ = can_call_user(conn, user["id"], peer["id"])
+            item["can_call"] = can_call
+        else:
+            item["can_call"] = True
+            item["can_delete"] = item["created_by"] == user["id"]
+            role = conn.execute("SELECT role FROM chat_members WHERE chat_id = ? AND user_id = ?", (item["id"], user["id"])).fetchone()
+            count = conn.execute("SELECT COUNT(*) as total FROM chat_members WHERE chat_id = ?", (item["id"],)).fetchone()
+            item["my_role"] = role["role"] if role else "member"
+            item["member_count"] = count["total"] if count else 0
+        items.append(item)
+    conn.close()
+    return items
+
+@app.get("/api/chats/{chat_id}/members")
+async def chat_members(chat_id: int, user=Depends(get_current_user)):
+    conn = get_db()
+    if not can_access_chat(conn, user["id"], chat_id):
+        conn.close()
+        raise HTTPException(status_code=403, detail="Нет доступа")
+    rows = conn.execute("SELECT u.id, u.username, u.nickname, u.avatar, cm.role FROM chat_members cm JOIN users u ON u.id = cm.user_id WHERE cm.chat_id = ? ORDER BY CASE cm.role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 ELSE 2 END, u.nickname", (chat_id,)).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+@app.get("/api/chats/{chat_id}/messages")
+async def chat_messages(chat_id: int, limit: int = 100, user=Depends(get_current_user)):
+    conn = get_db()
+    if not can_access_chat(conn, user["id"], chat_id):
+        conn.close()
+        raise HTTPException(status_code=403, detail="Нет доступа")
+    limit = min(max(limit, 1), 200)
+    rows = conn.execute(
+        "SELECT m.*, u.username, u.nickname, u.avatar, "
+        "(SELECT COUNT(DISTINCT r.user_id) FROM message_reads r WHERE r.message_id = m.id AND r.user_id != m.user_id) as read_count "
+        "FROM messages m JOIN users u ON u.id = m.user_id "
+        "WHERE m.chat_id = ? AND NOT EXISTS (SELECT 1 FROM message_deleted_for d WHERE d.message_id = m.id AND d.user_id = ?) "
+        "ORDER BY m.id DESC LIMIT ?",
+        (chat_id, user["id"], limit)
+    ).fetchall()
+    conn.close()
+    return [serialize_message(r) for r in reversed(rows)]
+
+@app.post("/api/chats/{chat_id}/messages")
+async def send_message(chat_id: int, text: str = Form(""), kind: str = Form("text"), file: Optional[UploadFile] = File(None), user=Depends(get_current_user)):
+    if kind not in {"text", "image", "video", "voice", "file", "circle", "emoji", "sticker"}:
+        kind = "file"
+    conn = get_db()
+    chat = get_chat(conn, chat_id)
+    if not chat or not can_access_chat(conn, user["id"], chat_id):
+        conn.close()
+        raise HTTPException(status_code=403, detail="Нет доступа")
+    if chat["type"] == "direct":
+        peer = get_direct_peer(conn, chat_id, user["id"])
+        if not peer or is_any_block(conn, user["id"], peer["id"]):
+            conn.close()
+            raise HTTPException(status_code=403, detail="Нельзя писать в этот чат")
+    file_path = None
+    file_name = None
+    mime_type = None
+    if file:
+        ext = Path(file.filename or "file.bin").suffix
+        safe_name = f"{uuid.uuid4().hex}{ext}"
+        payload = await file.read()
+        if len(payload) > 50 * 1024 * 1024:
+            conn.close()
+            raise HTTPException(status_code=400, detail="Файл до 50MB")
+        write_encrypted_file(UPLOAD_DIR / safe_name, payload)
+        file_path = safe_name
+        file_name = file.filename
+        mime_type = file.content_type
+    if not text.strip() and not file_path:
+        conn.close()
+        raise HTTPException(status_code=400, detail="Пустое сообщение")
+    with db_lock, conn:
+        cursor = conn.execute("INSERT INTO messages(chat_id, user_id, kind, text, file_path, file_name, mime_type, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", (chat_id, user["id"], kind, text.strip(), file_path, file_name, mime_type, now_iso()))
+        msg_id = cursor.lastrowid
+    row = conn.execute("SELECT m.*, u.username, u.nickname, u.avatar FROM messages m JOIN users u ON u.id = m.user_id WHERE m.id = ?", (msg_id,)).fetchone()
+    conn.close()
+    data = serialize_message(row)
+    await broadcast_to_chat(chat_id, {"type": "message:new", "payload": data})
+    return data
+
+@app.post("/api/chats/{chat_id}/messages/asset")
+async def send_asset_message(chat_id: int, asset_id: int = Form(...), text: str = Form(""), user=Depends(get_current_user)):
+    conn = get_db()
+    chat = get_chat(conn, chat_id)
+    if not chat or not can_access_chat(conn, user["id"], chat_id):
+        conn.close()
+        raise HTTPException(status_code=403, detail="Нет доступа")
+    if chat["type"] == "direct":
+        peer = get_direct_peer(conn, chat_id, user["id"])
+        if not peer or is_any_block(conn, user["id"], peer["id"]):
+            conn.close()
+            raise HTTPException(status_code=403, detail="Нельзя писать в этот чат")
+    asset = conn.execute("SELECT id, kind, file_path, file_name, mime_type FROM custom_assets WHERE id = ? AND user_id = ?", (asset_id, user["id"])).fetchone()
+    if not asset:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Стикер/эмодзи не найден")
+    with db_lock, conn:
+        cur = conn.execute("INSERT INTO messages(chat_id, user_id, kind, text, file_path, file_name, mime_type, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", (chat_id, user["id"], asset["kind"], text.strip(), asset["file_path"], asset["file_name"], asset["mime_type"], now_iso()))
+        msg_id = cur.lastrowid
+    row = conn.execute("SELECT m.*, u.username, u.nickname, u.avatar FROM messages m JOIN users u ON u.id = m.user_id WHERE m.id = ?", (msg_id,)).fetchone()
+    conn.close()
+    data = serialize_message(row)
+    await broadcast_to_chat(chat_id, {"type": "message:new", "payload": data})
+    return data
+
+@app.delete("/api/messages/{message_id}")
+async def delete_message(message_id: int, mode: str = "me", user=Depends(get_current_user)):
+    if mode not in {"me", "all"}:
+        raise HTTPException(status_code=400, detail="mode должен быть me или all")
+    conn = get_db()
+    row = conn.execute("SELECT id, chat_id, user_id FROM messages WHERE id = ?", (message_id,)).fetchone()
+    if not row:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Сообщение не найдено")
+    chat_id = row["chat_id"]
+    if not can_access_chat(conn, user["id"], chat_id):
+        conn.close()
+        raise HTTPException(status_code=403, detail="Нет доступа")
+    if mode == "me":
+        with db_lock, conn:
+            conn.execute("INSERT OR IGNORE INTO message_deleted_for(message_id, user_id, created_at) VALUES (?, ?, ?)", (message_id, user["id"], now_iso()))
+        conn.close()
+        await push_to_user(user["id"], {"type": "message:deleted_me", "payload": {"chat_id": chat_id, "message_id": message_id}})
+        return {"ok": True}
+    if row["user_id"] != user["id"]:
+        conn.close()
+        raise HTTPException(status_code=403, detail="Удалять у всех может только автор сообщения")
+    with db_lock, conn:
+        conn.execute("DELETE FROM messages WHERE id = ?", (message_id,))
+    conn.close()
+    await broadcast_to_chat(chat_id, {"type": "message:deleted_all", "payload": {"chat_id": chat_id, "message_id": message_id}})
+    return {"ok": True}
+
+@app.post("/api/chats/{chat_id}/read")
+async def mark_read(chat_id: int, user=Depends(get_current_user)):
+    conn = get_db()
+    if not can_access_chat(conn, user["id"], chat_id):
+        conn.close()
+        raise HTTPException(status_code=403, detail="Нет доступа")
+    last = conn.execute(
+        "SELECT id FROM messages WHERE chat_id = ? AND user_id != ? ORDER BY id DESC LIMIT 1",
+        (chat_id, user["id"]),
+    ).fetchone()
+    if not last:
+        conn.close()
+        return {"ok": True}
+    with db_lock, conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO message_reads(message_id, user_id, read_at) "
+            "SELECT m.id, ?, ? FROM messages m WHERE m.chat_id = ? AND m.user_id != ?",
+            (user["id"], now_iso(), chat_id, user["id"]),
+        )
+    conn.close()
+    await broadcast_to_chat(chat_id, {
+        "type": "message:read",
+        "payload": {"chat_id": chat_id, "reader_id": user["id"], "up_to_id": last["id"]},
+    })
+    return {"ok": True}
+
+@app.websocket("/ws")
+async def ws_endpoint(ws: WebSocket):
+    token = ws.query_params.get("token", "")
+    user = get_user_by_token(token)
+    if not user:
+        await ws.close(code=1008)
+        return
+    user_id = user["id"]
+    await ws.accept()
+    active_connections.setdefault(user_id, set()).add(ws)
+    try:
+        await ws.send_json({"type": "hello", "payload": {"user_id": user_id}})
+        while True:
+            try:
+                msg = await ws.receive_json()
+            except Exception:
+                # Обрыв соединения или некорректный JSON - прерываем цикл WS для этого клиента
+                break
+                
+            msg_type = msg.get("type")
+            if msg_type == "ping":
+                await ws.send_json({"type": "pong"})
+                continue
+            if msg_type == "call:join":
+                chat_id = int(msg.get("chat_id", 0))
+                conn = get_db()
+                chat = get_chat(conn, chat_id)
+                if not chat or not can_access_chat(conn, user_id, chat_id):
+                    conn.close()
+                    continue
+                if chat["type"] == "direct":
+                    peer = get_direct_peer(conn, chat_id, user_id)
+                    if not peer:
+                        conn.close()
+                        continue
+                    allowed, _ = can_call_user(conn, user_id, peer["id"])
+                    if not allowed:
+                        conn.close()
+                        continue
+                room = call_rooms.setdefault(chat_id, {})
+                was_empty = len(room) == 0
+                room[user_id] = ws
+                state = {
+                    "mic": bool(msg.get("mic", True)),
+                    "cam": bool(msg.get("cam", False)),
+                    "screen": bool(msg.get("screen", False)),
+                }
+                call_states.setdefault(chat_id, {})[user_id] = state
+                others = [uid for uid in room.keys() if uid != user_id]
+                states = call_states.get(chat_id, {})
+                member_rows = conn.execute("SELECT user_id FROM chat_members WHERE chat_id = ?", (chat_id,)).fetchall()
+                conn.close()
+                if was_empty:
+                    for m in member_rows:
+                        uid = m["user_id"]
+                        if uid == user_id:
+                            continue
+                        await push_to_user(uid, {"type": "call:ring", "payload": {"chat_id": chat_id, "from_user": user_id, "chat_type": chat["type"]}})
+                await ws.send_json({"type": "call:participants", "payload": {"chat_id": chat_id, "users": others, "states": states}})
+                for uid, peer_ws in room.items():
+                    if uid != user_id:
+                        try:
+                            await peer_ws.send_json({"type": "call:user_joined", "payload": {"chat_id": chat_id, "user_id": user_id, "state": state}})
+                        except Exception:
+                            pass
+                continue
+            if msg_type == "call:leave":
+                chat_id = int(msg.get("chat_id", 0))
+                room = call_rooms.get(chat_id, {})
+                if room.get(user_id) is ws:
+                    room.pop(user_id, None)
+                    call_states.get(chat_id, {}).pop(user_id, None)
+                    for peer_ws in room.values():
+                        try:
+                            await peer_ws.send_json({"type": "call:user_left", "payload": {"chat_id": chat_id, "user_id": user_id}})
+                        except Exception:
+                            pass
+                    if not room:
+                        call_rooms.pop(chat_id, None)
+                        call_states.pop(chat_id, None)
+                continue
+            if msg_type == "call:state":
+                chat_id = int(msg.get("chat_id", 0))
+                room = call_rooms.get(chat_id, {})
+                if room.get(user_id) is not ws:
+                    continue
+                state = {
+                    "mic": bool(msg.get("mic", True)),
+                    "cam": bool(msg.get("cam", False)),
+                    "screen": bool(msg.get("screen", False)),
+                }
+                call_states.setdefault(chat_id, {})[user_id] = state
+                for uid, peer_ws in room.items():
+                    if uid != user_id:
+                        try:
+                            await peer_ws.send_json({"type": "call:user_state", "payload": {"chat_id": chat_id, "user_id": user_id, "state": state}})
+                        except Exception:
+                            pass
+                continue
+            if msg_type == "call:signal":
+                chat_id = int(msg.get("chat_id", 0))
+                to_user = int(msg.get("to_user", 0))
+                room = call_rooms.get(chat_id, {})
+                if room.get(user_id) is not ws:
+                    continue
+                target_ws = room.get(to_user)
+                if target_ws:
+                    signal = msg.get("signal") or {}
+                    try:
+                        await target_ws.send_json({"type": "call:signal", "payload": {"chat_id": chat_id, "from_user": user_id, "signal": signal}})
+                    except Exception:
+                        pass
+                continue
+    except WebSocketDisconnect:
+        pass
+    except Exception as err:
+        logger.error(f"WebSocket unhandled loop error: {err}")
+    finally:
+        active_connections.get(user_id, set()).discard(ws)
+        for chat_id in list(call_rooms.keys()):
+            room = call_rooms.get(chat_id, {})
+            if room.get(user_id) is ws:
+                room.pop(user_id, None)
+                call_states.get(chat_id, {}).pop(user_id, None)
+                for peer_ws in list(room.values()):
+                    try:
+                        await peer_ws.send_json({"type": "call:user_left", "payload": {"chat_id": chat_id, "user_id": user_id}})
+                    except Exception:
+                        pass
+            if not room:
+                call_rooms.pop(chat_id, None)
+                call_states.pop(chat_id, None)
+
+if __name__ == "__main__":
+    import uvicorn
+    host = os.getenv("HOST", "0.0.0.0")
+    port = int(os.getenv("PORT", "8000"))
+    _log_access_urls(host, port)
+    uvicorn.run("app:app", host=host, port=port, reload=True)
