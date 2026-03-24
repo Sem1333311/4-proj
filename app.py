@@ -245,6 +245,7 @@ class SettingsIn(BaseModel):
     allow_calls_from: str = "friends"
     allow_group_invites: str = "friends"
     show_last_seen: str = "friends"
+    theme: str = "default"
 
 class PasswordChangeIn(BaseModel):
     old_password: str
@@ -255,6 +256,7 @@ VALID_SETTING_VALUES = {
     "allow_calls_from": {"everyone", "friends", "nobody"},
     "allow_group_invites": {"everyone", "friends", "nobody"},
     "show_last_seen": {"everyone", "friends", "nobody"},
+    "theme": {"default", "light", "burgundy", "black"},
 }
 
 def get_db():
@@ -306,6 +308,7 @@ CREATE TABLE IF NOT EXISTS user_settings (
     allow_calls_from TEXT NOT NULL DEFAULT 'friends',
     allow_group_invites TEXT NOT NULL DEFAULT 'friends',
     show_last_seen TEXT NOT NULL DEFAULT 'friends',
+    theme TEXT NOT NULL DEFAULT 'default',
     FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 CREATE TABLE IF NOT EXISTS blocked_users (
@@ -338,6 +341,7 @@ CREATE TABLE IF NOT EXISTS chats (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     type TEXT NOT NULL,
     title TEXT,
+    avatar TEXT,
     created_by INTEGER NOT NULL,
     created_at TEXT NOT NULL,
     FOREIGN KEY(created_by) REFERENCES users(id)
@@ -360,6 +364,7 @@ CREATE TABLE IF NOT EXISTS messages (
     file_path TEXT,
     file_name TEXT,
     mime_type TEXT,
+    reply_to_message_id INTEGER,
     created_at TEXT NOT NULL,
     FOREIGN KEY(chat_id) REFERENCES chats(id) ON DELETE CASCADE,
     FOREIGN KEY(user_id) REFERENCES users(id)
@@ -404,9 +409,33 @@ CREATE TABLE IF NOT EXISTS message_reads (
     FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
 );
         """)
+        settings_cols = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(user_settings)").fetchall()
+        }
+        if "theme" not in settings_cols:
+            conn.execute(
+                "ALTER TABLE user_settings ADD COLUMN theme TEXT NOT NULL DEFAULT 'default'"
+            )
+
+        chat_cols = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(chats)").fetchall()
+        }
+        if "avatar" not in chat_cols:
+            conn.execute("ALTER TABLE chats ADD COLUMN avatar TEXT")
+
+        message_cols = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(messages)").fetchall()
+        }
+        if "reply_to_message_id" not in message_cols:
+            conn.execute("ALTER TABLE messages ADD COLUMN reply_to_message_id INTEGER")
+
     conn.close()
 
 init_db()
+
 
 def get_user_by_token(token: str) -> Optional[sqlite3.Row]:
     conn = get_db()
@@ -428,8 +457,27 @@ def get_current_user(request: Request) -> sqlite3.Row:
     return user
 
 def ensure_settings(conn: sqlite3.Connection, user_id: int):
+    cols = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(user_settings)").fetchall()
+    }
+    if "theme" not in cols:
+        conn.execute(
+            "ALTER TABLE user_settings ADD COLUMN theme TEXT NOT NULL DEFAULT 'default'"
+        )
+
     conn.execute(
-        "INSERT OR IGNORE INTO user_settings(user_id, allow_friend_requests, allow_calls_from, allow_group_invites, show_last_seen) VALUES (?, 'everyone', 'friends', 'friends', 'friends')",
+        """
+        INSERT OR IGNORE INTO user_settings(
+            user_id,
+            allow_friend_requests,
+            allow_calls_from,
+            allow_group_invites,
+            show_last_seen,
+            theme
+        )
+        VALUES (?, 'everyone', 'friends', 'friends', 'friends', 'default')
+        """,
         (user_id,),
     )
 
@@ -490,8 +538,61 @@ def can_invite_to_group(conn: sqlite3.Connection, inviter_id: int, target_id: in
         return False, "Пользователь принимает приглашения только от друзей"
     return True, ""
 
-def serialize_message(row: sqlite3.Row) -> dict:
+def _load_reply_preview(conn: sqlite3.Connection, chat_id: int, reply_to_id: int) -> Optional[dict]:
+    ref = conn.execute(
+        """
+        SELECT m.id, m.kind, m.text, m.file_name, u.nickname
+        FROM messages m
+        JOIN users u ON u.id = m.user_id
+        WHERE m.id = ? AND m.chat_id = ?
+        LIMIT 1
+        """,
+        (reply_to_id, chat_id),
+    ).fetchone()
+    if not ref:
+        return None
+    return {
+        "id": ref["id"],
+        "nickname": ref["nickname"],
+        "kind": ref["kind"],
+        "text": ref["text"] or "",
+        "file_name": ref["file_name"],
+    }
+
+def _normalize_reply_target(conn: sqlite3.Connection, chat_id: int, reply_to: Optional[int]) -> Optional[int]:
+    if reply_to is None:
+        return None
+    try:
+        reply_id = int(reply_to)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Некорректный reply_to")
+    if reply_id <= 0:
+        raise HTTPException(status_code=400, detail="Некорректный reply_to")
+    exists = conn.execute(
+        "SELECT id FROM messages WHERE id = ? AND chat_id = ? LIMIT 1",
+        (reply_id, chat_id),
+    ).fetchone()
+    if not exists:
+        raise HTTPException(status_code=400, detail="Сообщение для ответа не найдено")
+    return reply_id
+
+def serialize_message(
+    row: sqlite3.Row,
+    conn: Optional[sqlite3.Connection] = None,
+    reply_cache: Optional[dict[int, Optional[dict]]] = None,
+) -> dict:
     keys = row.keys()
+    reply_to_id = (
+        int(row["reply_to_message_id"])
+        if "reply_to_message_id" in keys and row["reply_to_message_id"] is not None
+        else None
+    )
+    reply_preview = None
+    if reply_to_id and conn:
+        cache = reply_cache if reply_cache is not None else {}
+        if reply_to_id not in cache:
+            cache[reply_to_id] = _load_reply_preview(conn, row["chat_id"], reply_to_id)
+        reply_preview = cache.get(reply_to_id)
     return {
         "id": row["id"],
         "chat_id": row["chat_id"],
@@ -504,6 +605,8 @@ def serialize_message(row: sqlite3.Row) -> dict:
         "file_url": f"/media/{row['file_path']}" if row["file_path"] else None,
         "file_name": row["file_name"],
         "mime_type": row["mime_type"],
+        "reply_to_message_id": reply_to_id,
+        "reply_preview": reply_preview,
         "created_at": row["created_at"],
         "read_count": row["read_count"] if "read_count" in keys else 0,
     }
@@ -682,12 +785,28 @@ async def update_settings(data: SettingsIn, user=Depends(get_current_user)):
     for key, value in payload.items():
         if value not in VALID_SETTING_VALUES[key]:
             raise HTTPException(status_code=400, detail=f"Неверное значение {key}")
+
     conn = get_db()
     with db_lock, conn:
         ensure_settings(conn, user["id"])
         conn.execute(
-            "UPDATE user_settings SET allow_friend_requests = ?, allow_calls_from = ?, allow_group_invites = ?, show_last_seen = ? WHERE user_id = ?",
-            (payload["allow_friend_requests"], payload["allow_calls_from"], payload["allow_group_invites"], payload["show_last_seen"], user["id"]),
+            """
+            UPDATE user_settings
+            SET allow_friend_requests = ?,
+                allow_calls_from = ?,
+                allow_group_invites = ?,
+                show_last_seen = ?,
+                theme = ?
+            WHERE user_id = ?
+            """,
+            (
+                payload["allow_friend_requests"],
+                payload["allow_calls_from"],
+                payload["allow_group_invites"],
+                payload["show_last_seen"],
+                payload["theme"],
+                user["id"],
+            ),
         )
         settings = get_settings(conn, user["id"])
     conn.close()
@@ -756,6 +875,32 @@ async def upload_avatar(file: UploadFile = File(...), user=Depends(get_current_u
     conn.close()
     return serialize_user(updated)
 
+@app.post("/api/groups/{chat_id}/avatar")
+async def upload_group_avatar(chat_id: int, file: UploadFile = File(...), user=Depends(get_current_user)):
+    conn = get_db()
+    chat = get_chat(conn, chat_id)
+    if not chat or chat["type"] != "group":
+        conn.close()
+        raise HTTPException(status_code=404, detail="Группа не найдена")
+    member = get_chat_member(conn, chat_id, user["id"])
+    if not member:
+        conn.close()
+        raise HTTPException(status_code=403, detail="Нет доступа")
+    if member["role"] not in {"owner", "admin"}:
+        conn.close()
+        raise HTTPException(status_code=403, detail="Менять аватар группы могут owner/admin")
+    payload = await file.read()
+    if len(payload) > 7 * 1024 * 1024:
+        conn.close()
+        raise HTTPException(status_code=400, detail="Файл до 7MB")
+    ext = Path(file.filename or "group_avatar.png").suffix or ".png"
+    name = f"group_avatar_{chat_id}_{uuid.uuid4().hex}{ext}"
+    write_encrypted_file(UPLOAD_DIR / name, payload)
+    with db_lock, conn:
+        conn.execute("UPDATE chats SET avatar = ? WHERE id = ?", (name, chat_id))
+    conn.close()
+    return {"ok": True, "avatar": name, "file_url": f"/media/{name}"}
+
 @app.get("/api/users/search")
 async def search_users(q: str = "", user=Depends(get_current_user)):
     q = q.strip().lower()
@@ -768,6 +913,58 @@ async def search_users(q: str = "", user=Depends(get_current_user)):
     ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+@app.get("/api/users/{target_id}")
+async def get_user_profile(target_id: int, user=Depends(get_current_user)):
+    conn = get_db()
+    target = conn.execute(
+        "SELECT id, username, nickname, avatar, about FROM users WHERE id = ?",
+        (target_id,),
+    ).fetchone()
+    if not target:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Пользователь не найден")
+
+    is_self = target_id == user["id"]
+    blocked_by_me = is_blocked(conn, user["id"], target_id) if not is_self else False
+    blocked_by_target = is_blocked(conn, target_id, user["id"]) if not is_self else False
+    if blocked_by_target:
+        conn.close()
+        raise HTTPException(status_code=403, detail="Профиль недоступен")
+
+    is_friend_with_me = is_friend(conn, user["id"], target_id) if not is_self else False
+    outgoing_request = None
+    incoming_request = None
+    can_send_friend_request = False
+
+    if not is_self and not blocked_by_me:
+        outgoing_request = conn.execute(
+            "SELECT id FROM friend_requests WHERE from_user_id = ? AND to_user_id = ? AND status = 'pending' ORDER BY id DESC LIMIT 1",
+            (user["id"], target_id),
+        ).fetchone()
+        incoming_request = conn.execute(
+            "SELECT id FROM friend_requests WHERE from_user_id = ? AND to_user_id = ? AND status = 'pending' ORDER BY id DESC LIMIT 1",
+            (target_id, user["id"]),
+        ).fetchone()
+        if not is_friend_with_me and not outgoing_request and not incoming_request:
+            target_settings = get_settings(conn, target_id)
+            can_send_friend_request = target_settings["allow_friend_requests"] == "everyone"
+
+    profile = serialize_user(target)
+    profile.update(
+        {
+            "is_self": is_self,
+            "is_friend": is_friend_with_me,
+            "blocked_by_me": blocked_by_me,
+            "blocked_by_target": blocked_by_target,
+            "outgoing_request_id": outgoing_request["id"] if outgoing_request else None,
+            "incoming_request_id": incoming_request["id"] if incoming_request else None,
+            "can_send_friend_request": can_send_friend_request,
+            "can_open_direct": bool(is_friend_with_me and not blocked_by_me and not blocked_by_target),
+        }
+    )
+    conn.close()
+    return profile
 
 @app.get("/api/assets")
 async def list_assets(kind: str = "", user=Depends(get_current_user)):
@@ -1223,7 +1420,7 @@ async def reject_group_invite(invite_id: int, user=Depends(get_current_user)):
 @app.get("/api/chats")
 async def get_chats(user=Depends(get_current_user)):
     conn = get_db()
-    rows = conn.execute("SELECT c.id, c.type, c.title, c.created_by, (SELECT m.text FROM messages m WHERE m.chat_id = c.id ORDER BY m.id DESC LIMIT 1) as last_text, (SELECT m.created_at FROM messages m WHERE m.chat_id = c.id ORDER BY m.id DESC LIMIT 1) as last_at FROM chats c JOIN chat_members cm ON cm.chat_id = c.id WHERE cm.user_id = ? ORDER BY COALESCE(last_at, c.created_at) DESC", (user["id"],)).fetchall()
+    rows = conn.execute("SELECT c.id, c.type, c.title, c.avatar, c.created_by, (SELECT m.text FROM messages m WHERE m.chat_id = c.id ORDER BY m.id DESC LIMIT 1) as last_text, (SELECT m.created_at FROM messages m WHERE m.chat_id = c.id ORDER BY m.id DESC LIMIT 1) as last_at FROM chats c JOIN chat_members cm ON cm.chat_id = c.id WHERE cm.user_id = ? ORDER BY COALESCE(last_at, c.created_at) DESC", (user["id"],)).fetchall()
     items = []
     for r in rows:
         item = dict(r)
@@ -1273,11 +1470,20 @@ async def chat_messages(chat_id: int, limit: int = 100, user=Depends(get_current
         "ORDER BY m.id DESC LIMIT ?",
         (chat_id, user["id"], limit)
     ).fetchall()
+    reply_cache: dict[int, Optional[dict]] = {}
+    items = [serialize_message(r, conn=conn, reply_cache=reply_cache) for r in reversed(rows)]
     conn.close()
-    return [serialize_message(r) for r in reversed(rows)]
+    return items
 
 @app.post("/api/chats/{chat_id}/messages")
-async def send_message(chat_id: int, text: str = Form(""), kind: str = Form("text"), file: Optional[UploadFile] = File(None), user=Depends(get_current_user)):
+async def send_message(
+    chat_id: int,
+    text: str = Form(""),
+    kind: str = Form("text"),
+    reply_to: Optional[int] = Form(None),
+    file: Optional[UploadFile] = File(None),
+    user=Depends(get_current_user),
+):
     if kind not in {"text", "image", "video", "voice", "file", "circle", "emoji", "sticker"}:
         kind = "file"
     conn = get_db()
@@ -1290,6 +1496,7 @@ async def send_message(chat_id: int, text: str = Form(""), kind: str = Form("tex
         if not peer or is_any_block(conn, user["id"], peer["id"]):
             conn.close()
             raise HTTPException(status_code=403, detail="Нельзя писать в этот чат")
+    reply_to_id = _normalize_reply_target(conn, chat_id, reply_to)
     file_path = None
     file_name = None
     mime_type = None
@@ -1308,16 +1515,35 @@ async def send_message(chat_id: int, text: str = Form(""), kind: str = Form("tex
         conn.close()
         raise HTTPException(status_code=400, detail="Пустое сообщение")
     with db_lock, conn:
-        cursor = conn.execute("INSERT INTO messages(chat_id, user_id, kind, text, file_path, file_name, mime_type, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", (chat_id, user["id"], kind, text.strip(), file_path, file_name, mime_type, now_iso()))
+        cursor = conn.execute(
+            "INSERT INTO messages(chat_id, user_id, kind, text, file_path, file_name, mime_type, reply_to_message_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                chat_id,
+                user["id"],
+                kind,
+                text.strip(),
+                file_path,
+                file_name,
+                mime_type,
+                reply_to_id,
+                now_iso(),
+            ),
+        )
         msg_id = cursor.lastrowid
     row = conn.execute("SELECT m.*, u.username, u.nickname, u.avatar FROM messages m JOIN users u ON u.id = m.user_id WHERE m.id = ?", (msg_id,)).fetchone()
+    data = serialize_message(row, conn=conn)
     conn.close()
-    data = serialize_message(row)
     await broadcast_to_chat(chat_id, {"type": "message:new", "payload": data})
     return data
 
 @app.post("/api/chats/{chat_id}/messages/asset")
-async def send_asset_message(chat_id: int, asset_id: int = Form(...), text: str = Form(""), user=Depends(get_current_user)):
+async def send_asset_message(
+    chat_id: int,
+    asset_id: int = Form(...),
+    text: str = Form(""),
+    reply_to: Optional[int] = Form(None),
+    user=Depends(get_current_user),
+):
     conn = get_db()
     chat = get_chat(conn, chat_id)
     if not chat or not can_access_chat(conn, user["id"], chat_id):
@@ -1328,16 +1554,30 @@ async def send_asset_message(chat_id: int, asset_id: int = Form(...), text: str 
         if not peer or is_any_block(conn, user["id"], peer["id"]):
             conn.close()
             raise HTTPException(status_code=403, detail="Нельзя писать в этот чат")
+    reply_to_id = _normalize_reply_target(conn, chat_id, reply_to)
     asset = conn.execute("SELECT id, kind, file_path, file_name, mime_type FROM custom_assets WHERE id = ? AND user_id = ?", (asset_id, user["id"])).fetchone()
     if not asset:
         conn.close()
         raise HTTPException(status_code=404, detail="Стикер/эмодзи не найден")
     with db_lock, conn:
-        cur = conn.execute("INSERT INTO messages(chat_id, user_id, kind, text, file_path, file_name, mime_type, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", (chat_id, user["id"], asset["kind"], text.strip(), asset["file_path"], asset["file_name"], asset["mime_type"], now_iso()))
+        cur = conn.execute(
+            "INSERT INTO messages(chat_id, user_id, kind, text, file_path, file_name, mime_type, reply_to_message_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                chat_id,
+                user["id"],
+                asset["kind"],
+                text.strip(),
+                asset["file_path"],
+                asset["file_name"],
+                asset["mime_type"],
+                reply_to_id,
+                now_iso(),
+            ),
+        )
         msg_id = cur.lastrowid
     row = conn.execute("SELECT m.*, u.username, u.nickname, u.avatar FROM messages m JOIN users u ON u.id = m.user_id WHERE m.id = ?", (msg_id,)).fetchone()
+    data = serialize_message(row, conn=conn)
     conn.close()
-    data = serialize_message(row)
     await broadcast_to_chat(chat_id, {"type": "message:new", "payload": data})
     return data
 
