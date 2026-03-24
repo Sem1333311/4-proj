@@ -8,7 +8,7 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <title>LAN Messenger</title>
     <!-- Обновленный параметр кэша ?v=... для CSS и JS -->
-    <link rel="stylesheet" href="/static/style.css?v=20260320d">
+    <link rel="stylesheet" href="/static/style.css?v=20260324a">
     <meta http-equiv="Permissions-Policy" content="camera=(self), microphone=(self), display-capture=(self)">
 </head>
 <body>
@@ -64,6 +64,10 @@
                     <span class="quick-glyph">👥</span>
                     <span class="quick-label">Друзья</span>
                 </button>
+                <button id="tabSettings" class="quick" aria-label="Настройки">
+                    <span class="quick-glyph">⚙️</span>
+                    <span class="quick-label">Настр.</span>
+                </button>
             </div>
         </aside>
 
@@ -72,9 +76,7 @@
                 <div class="profile-mini" id="profileMini"></div>
 
                 <div class="sidebar-actions">
-                    <button id="btnCopyMyId" class="ghost" title="Скопировать ID">🆔</button>
-                    <button id="btnProfile" title="Профиль">👤</button>
-                    <button id="btnSettings" title="Настройки">⚙️</button>
+                    
                 </div>
             </div>
 
@@ -142,6 +144,55 @@
                 <div id="friendsList" class="list"></div>
                 <button id="btnLogout" class="danger logout-button">🚪 Выйти</button>
             </div>
+
+            <div id="viewSettings" class="tab-pane hidden">
+                <div class="pane-header">
+                    <div>
+                        <p class="eyebrow">Профиль</p>
+                        <h3>Настройки</h3>
+                        <button id="btnCopyMyId" class="ghost" title="Скопировать ID">Нажмите что бы копировать🆔</button>
+                        <button id="btnProfile" title="Профиль">Нажмите что бы изменить Аватар👤</button>
+                    </div>
+                </div>
+                
+                <div class="settings-content">
+                    <h3>Настройки профиля</h3>
+                    <label>Имя пользователя:</label>
+                    <input type="text" id="profileName" placeholder="Ваше имя" class="glass-input">
+                    
+                    <label>Приватность:</label>
+                    <select id="privacySettings" class="glass-input">
+                        <option value="all">Все</option>
+                        <option value="friends">Только друзья</option>
+                        <option value="nobody">Никто</option>
+                    </select>
+
+                    <h4>Режим "Не беспокоить"</h4>
+                    <div class="toggle-row">
+                        <input type="checkbox" id="dndEnabled">
+                        <label for="dndEnabled" style="margin: 0; cursor: pointer;">Включить режим "Не беспокоить"</label>
+                    </div>
+                    <div id="dndTimeSettings" style="display: none; margin-top: 12px;">
+                        <label>Время начала:</label>
+                        <input type="time" id="dndStartTime" class="glass-input" value="22:00">
+                        <label style="margin-top: 8px;">Время окончания:</label>
+                        <input type="time" id="dndEndTime" class="glass-input" value="08:00">
+                    </div>
+                    
+                    <h4>Смена пароля</h4>
+                    <input type="password" id="oldPassword" placeholder="Старый пароль" class="glass-input">
+                    <input type="password" id="newPassword" placeholder="Новый пароль" class="glass-input">
+                    <button id="btnChangePassword" class="ghost action-btn">🔐 Сменить пароль</button>
+                    
+                    <h4>Заблокированные</h4>
+                    <div id="blockedList" class="list compact"></div>
+                    
+                    <div class="settings-actions">
+                        <button id="settingsSave" class="primary-btn">💾 Сохранить</button>
+                        <button id="btnDeleteAccount" class="danger-btn">🗑️ Удалить профиль</button>
+                    </div>
+                </div>
+            </div>
         </aside>
 
         <main class="chat-area panel glass">
@@ -160,6 +211,7 @@
                 <div class="chat-controls">
                     <button id="btnMobileMenu" class="mobile-only ghost" title="Разделы">📚</button>
                     <button id="btnShowMembers" class="hidden" title="Участники">👥</button>
+                    <button id="btnGroupAvatar" class="hidden" title="Сменить аватарку">🖼️</button>
                     <button id="btnCallStart" title="Звонок">📞</button>
                     <button id="btnInviteGroup" class="hidden" title="Пригласить">➕</button>
                     <button id="btnLeaveChat" class="danger hidden" title="Выйти">🚪</button>
@@ -202,6 +254,7 @@
                     <button id="sendBtn" title="Отправить">➤</button>
                 </div>
                 <input type="file" id="fileInput" class="hidden">
+                <input type="file" id="groupAvatarInput" class="hidden" accept="image/*">
             </div>
         </main>
     </div>
@@ -268,48 +321,6 @@
         </div>
     </dialog>
 
-    <dialog id="settingsDialog">
-        <h3>Настройки</h3>
-        <label class="small">Заявки в друзья</label>
-        <select id="setFriendReq">
-            <option value="everyone">Все</option>
-            <option value="friends">Только друзья</option>
-            <option value="nobody">Никто</option>
-        </select>
-        <label class="small">Кто может звонить</label>
-        <select id="setCalls">
-            <option value="everyone">Все</option>
-            <option value="friends">Только друзья</option>
-            <option value="nobody">Никто</option>
-        </select>
-        <label class="small">Приглашения в группы</label>
-        <select id="setInvites">
-            <option value="everyone">Все</option>
-            <option value="friends">Только друзья</option>
-            <option value="nobody">Никто</option>
-        </select>
-        <label class="small">Видимость статуса</label>
-        <select id="setLastSeen">
-            <option value="everyone">Все</option>
-            <option value="friends">Только друзья</option>
-            <option value="nobody">Никто</option>
-        </select>
-
-        <h4>Пароль</h4>
-        <input type="password" id="oldPassword" placeholder="Старый пароль">
-        <input type="password" id="newPassword" placeholder="Новый пароль">
-        <button id="btnChangePassword" class="ghost dialog-inline">🔐</button>
-
-        <h4>Заблокированные</h4>
-        <div id="blockedList" class="list compact"></div>
-
-        <div class="dialog-actions">
-            <button id="settingsSave">💾</button>
-            <button id="btnDeleteAccount" class="danger">🗑️</button>
-            <button id="settingsClose" class="ghost">✖</button>
-        </div>
-    </dialog>
-
     <dialog id="assetsDialog">
         <h3>Стикеры</h3>
         <select id="assetKind">
@@ -326,6 +337,6 @@
     </dialog>
 
     <!-- Обновленный параметр кэша ?v=... для CSS и JS -->
-    <script src="/static/app.js?v=20260320d"></script>
+    <script src="/static/app.js?v=20260324a"></script>
 </body>
 </html>
