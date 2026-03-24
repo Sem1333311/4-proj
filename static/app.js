@@ -99,6 +99,7 @@ function setMainTab(tab) {
         ["requests", "paneRequests", "tabRequests"],
         ["search", "paneSearch", "tabSearch"],
         ["friends", "paneFriends", "tabFriends"],
+        ["settings", "viewSettings", "tabSettings"],
     ];
     for (const [key, paneId, btnId] of pairs) {
         const pane = qs(paneId);
@@ -118,6 +119,8 @@ function setMainTab(tab) {
 function setChatOpen(open) {
     state.ui.chatOpen = !!open;
     document.body.classList.toggle("chat-open", state.ui.chatOpen);
+    // Управляем классом chat-active для скрытия нижнего меню на мобилках
+    document.body.classList.toggle("chat-active", state.ui.chatOpen);
     if (window.innerWidth <= 980) {
         document.body.classList.toggle("menu-open", !state.ui.chatOpen);
     }
@@ -350,23 +353,23 @@ function messageBody(m) {
     const fileUrl = withMediaToken(m.file_url);
     if (m.kind === "image" || m.kind === "sticker" || m.kind === "emoji") {
         parts.push(
-            `<img src="${fileUrl}" alt="${escapeHtml(m.file_name || "Вложение")}" loading="lazy">`,
+            `<div style="position: relative; display: inline-block;"><img src="${fileUrl}" alt="${escapeHtml(m.file_name || "Вложение")}" loading="lazy"><a href="${fileUrl}" download="${escapeHtml(m.file_name || "image")}" style="position: absolute; bottom: 8px; right: 8px; background: rgba(0,0,0,0.7); color: white; padding: 8px 12px; border-radius: 8px; text-decoration: none; font-size: 13px;" title="Скачать">⬇️</a></div>`,
         );
         return parts.join("");
     }
     if (m.kind === "video" || m.kind === "circle") {
         parts.push(
-            `<video src="${fileUrl}" controls playsinline webkit-playsinline preload="metadata"></video>`,
+            `<div style="position: relative; display: inline-block;"><video src="${fileUrl}" controls playsinline webkit-playsinline preload="metadata"></video><a href="${fileUrl}" download="${escapeHtml(m.file_name || "video")}" style="position: absolute; bottom: 8px; right: 8px; background: rgba(0,0,0,0.7); color: white; padding: 8px 12px; border-radius: 8px; text-decoration: none; font-size: 13px;" title="Скачать">⬇️</a></div>`,
         );
         return parts.join("");
     }
     if (m.kind === "voice") {
         parts.push(
-            `<audio src="${fileUrl}" controls preload="metadata"></audio>`,
+            `<div style="display: flex; align-items: center; gap: 8px;"><audio src="${fileUrl}" controls preload="metadata"></audio><a href="${fileUrl}" download="${escapeHtml(m.file_name || "voice")}" style="background: rgba(94,168,255,0.2); color: var(--line-accent-strong); padding: 8px 12px; border-radius: 8px; text-decoration: none; font-size: 13px; white-space: nowrap;" title="Скачать">⬇️ Скачать</a></div>`,
         );
         return parts.join("");
     }
-    return `${text ? `${text}<br>` : ""}<a href="${fileUrl}" target="_blank">${escapeHtml(m.file_name || "Файл")}</a>`;
+    return `${text ? `${text}<br>` : ""}<a href="${fileUrl}" target="_blank" download="${escapeHtml(m.file_name || "Файл")}">${escapeHtml(m.file_name || "Файл")} ⬇️</a>`;
 }
 
 function appendMessage(m) {
@@ -484,12 +487,13 @@ function setChatHeader(chat) {
     const btnDelete = qs("btnDeleteGroup");
     const membersPanel = qs("groupMembersPanel");
     const btnShowMembers = qs("btnShowMembers");
+    const btnGroupAvatar = qs("btnGroupAvatar");
 
     if (titleEl) titleEl.textContent = titleText;
     if (metaEl) metaEl.textContent = chatMetaText(chat);
     if (avatarEl)
         avatarEl.innerHTML = avatarMarkup({
-            avatar: chat?.peer?.avatar,
+            avatar: chat?.avatar || chat?.peer?.avatar,
             label: titleText,
             seed: chat ? `chat-${chat.id}-${titleText}` : "empty-chat",
             className: "avatar-xl avatar-placeholder",
@@ -502,6 +506,13 @@ function setChatHeader(chat) {
     else hide(btnInvite);
     if (group) show(btnShowMembers);
     else hide(btnShowMembers);
+    // Показываем кнопку смены аватарки только для owner/admin
+    const myRole = myGroupRole();
+    if (group && btnGroupAvatar && (myRole === "owner" || myRole === "admin")) {
+        show(btnGroupAvatar);
+    } else if (btnGroupAvatar) {
+        hide(btnGroupAvatar);
+    }
     if (btnInvite)
         btnInvite.title = group ? "Пригласить по username" : "Пригласить";
     if (chat) show(btnLeave);
@@ -2341,14 +2352,27 @@ async function ensureSession() {
 
 async function loadSettings() {
     state.settings = await api("/api/settings");
-    const setFriendReq = qs("setFriendReq");
-    const setCalls = qs("setCalls");
-    const setInvites = qs("setInvites");
-    const setLastSeen = qs("setLastSeen");
-    if (setFriendReq) setFriendReq.value = state.settings.allow_friend_requests;
-    if (setCalls) setCalls.value = state.settings.allow_calls_from;
-    if (setInvites) setInvites.value = state.settings.allow_group_invites;
-    if (setLastSeen) setLastSeen.value = state.settings.show_last_seen;
+    const privacySettings = qs("privacySettings");
+    if (privacySettings) {
+        privacySettings.value = state.settings.allow_friend_requests || "everyone";
+    }
+    // Загрузка настроек DND
+    const dndEnabled = qs("dndEnabled");
+    const dndTimeSettings = qs("dndTimeSettings");
+    const dndStartTime = qs("dndStartTime");
+    const dndEndTime = qs("dndEndTime");
+    if (dndEnabled) {
+        dndEnabled.checked = !!state.settings.dnd_enabled;
+    }
+    if (dndTimeSettings) {
+        dndTimeSettings.style.display = dndEnabled?.checked ? "block" : "none";
+    }
+    if (dndStartTime) {
+        dndStartTime.value = state.settings.dnd_start_time || "22:00";
+    }
+    if (dndEndTime) {
+        dndEndTime.value = state.settings.dnd_end_time || "08:00";
+    }
 }
 
 async function onAuthorized() {
@@ -2395,6 +2419,7 @@ function bindUi() {
     const tabRequests = qs("tabRequests");
     const tabSearch = qs("tabSearch");
     const tabFriends = qs("tabFriends");
+    const tabSettings = qs("tabSettings");
     const btnBack = qs("btnBackToList");
     const btnMobile = qs("btnMobileMenu");
     const gateBtn = qs("gateBtn");
@@ -2425,12 +2450,12 @@ function bindUi() {
     const btnInviteGroup = qs("btnInviteGroup");
     const btnLeaveChat = qs("btnLeaveChat");
     const btnDeleteGroup = qs("btnDeleteGroup");
+    const btnGroupAvatar = qs("btnGroupAvatar");
+    const groupAvatarInput = qs("groupAvatarInput");
     const btnFriends = qs("btnFriends");
     const btnCopyMyId = qs("btnCopyMyId");
     const userSearch = qs("userSearch");
     const btnSettings = qs("btnSettings");
-    const settingsDialog = qs("settingsDialog");
-    const settingsClose = qs("settingsClose");
     const settingsSave = qs("settingsSave");
     const btnChangePassword = qs("btnChangePassword");
     const btnDeleteAccount = qs("btnDeleteAccount");
@@ -2457,6 +2482,7 @@ function bindUi() {
     if (tabRequests) tabRequests.onclick = () => setMainTab("requests");
     if (tabSearch) tabSearch.onclick = () => setMainTab("search");
     if (tabFriends) tabFriends.onclick = () => setMainTab("friends");
+    if (tabSettings) tabSettings.onclick = () => setMainTab("settings");
     if (btnBack) btnBack.onclick = () => setChatOpen(false);
     if (btnMobile)
         btnMobile.onclick = () => document.body.classList.toggle("menu-open");
@@ -2685,6 +2711,34 @@ function bindUi() {
             }
         };
 
+    if (btnGroupAvatar)
+        btnGroupAvatar.onclick = () => {
+            if (!state.currentChat || state.currentChat.type !== "group")
+                return;
+            groupAvatarInput?.click();
+        };
+
+    if (groupAvatarInput)
+        groupAvatarInput.onchange = async () => {
+            if (!state.currentChatId || !groupAvatarInput.files?.length)
+                return;
+            const file = groupAvatarInput.files[0];
+            const formData = new FormData();
+            formData.append("file", file);
+            try {
+                await api(`/api/groups/${state.currentChatId}/avatar`, {
+                    method: "POST",
+                    body: formData,
+                    headers: {},
+                });
+                await loadChats();
+                alert("Аватарка обновлена");
+            } catch (e) {
+                alert(e.message);
+            }
+            groupAvatarInput.value = "";
+        };
+
     if (btnLeaveChat)
         btnLeaveChat.onclick = async () => {
             if (!state.currentChatId) return;
@@ -2790,26 +2844,44 @@ function bindUi() {
             });
         };
 
+    // Обработчик кнопки настроек в sidebar - переключает на вкладку настроек
     if (btnSettings)
         btnSettings.onclick = async () => {
+            setMainTab("settings");
             await loadSettings();
             await loadBlockedList();
-            settingsDialog?.showModal();
         };
-    if (settingsClose) settingsClose.onclick = () => settingsDialog?.close();
+
+    // Переключение видимости настроек времени DND
+    const dndEnabledCheckbox = qs("dndEnabled");
+    const dndTimeSettingsDiv = qs("dndTimeSettings");
+    if (dndEnabledCheckbox && dndTimeSettingsDiv) {
+        dndEnabledCheckbox.onchange = () => {
+            dndTimeSettingsDiv.style.display = dndEnabledCheckbox.checked ? "block" : "none";
+        };
+    }
+
+    // Сохранение настроек во вкладке
     if (settingsSave)
         settingsSave.onclick = async () => {
-            state.settings = await api("/api/settings", {
-                method: "POST",
-                body: JSON.stringify({
-                    allow_friend_requests:
-                        qs("setFriendReq")?.value || "everyone",
-                    allow_calls_from: qs("setCalls")?.value || "friends",
-                    allow_group_invites: qs("setInvites")?.value || "friends",
-                    show_last_seen: qs("setLastSeen")?.value || "friends",
-                }),
-            });
-            settingsDialog?.close();
+            try {
+                state.settings = await api("/api/settings", {
+                    method: "POST",
+                    body: JSON.stringify({
+                        allow_friend_requests:
+                            qs("privacySettings")?.value || "everyone",
+                        allow_calls_from: qs("privacySettings")?.value || "friends",
+                        allow_group_invites: qs("privacySettings")?.value || "friends",
+                        show_last_seen: qs("privacySettings")?.value || "friends",
+                        dnd_enabled: qs("dndEnabled")?.checked || false,
+                        dnd_start_time: qs("dndStartTime")?.value || "22:00",
+                        dnd_end_time: qs("dndEndTime")?.value || "08:00",
+                    }),
+                });
+                alert("Настройки сохранены");
+            } catch (e) {
+                alert(e.message);
+            }
         };
 
     if (btnChangePassword)
