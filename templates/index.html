@@ -8,7 +8,7 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <title>LAN Messenger</title>
     <!-- Обновленный параметр кэша ?v=... для CSS и JS -->
-    <link rel="stylesheet" href="/static/style.css?v=20260325a">
+    <link rel="stylesheet" href="/static/style.css?v=20260325g">
     <meta http-equiv="Permissions-Policy" content="camera=(self), microphone=(self), display-capture=(self)">
 </head>
 <body>
@@ -26,14 +26,14 @@
             <div id="loginPane">
                 <input type="text" id="loginUsername" placeholder="Username" autocapitalize="none">
                 <input type="password" id="loginPassword" placeholder="Пароль">
-                <button id="loginBtn">🔐 Войти</button>
+                <button id="loginBtn" type="button">🔐 Войти</button>
             </div>
 
             <div id="registerPane" class="hidden">
                 <input type="text" id="regUsername" placeholder="Username" autocapitalize="none">
                 <input type="password" id="regPassword" placeholder="Пароль">
                 <input type="text" id="regNickname" placeholder="Ник">
-                <button id="registerBtn">✨ Создать</button>
+                <button id="registerBtn" type="button">✨ Создать</button>
             </div>
 
             <div id="authError" class="error"></div>
@@ -254,6 +254,13 @@
             </div>
 
             <div class="composer">
+                <div id="replyComposer" class="reply-composer hidden">
+                    <div class="reply-composer-copy">
+                        <p id="replyComposerTitle">Reply</p>
+                        <p id="replyComposerText"></p>
+                    </div>
+                    <button id="btnCancelReply" class="ghost" type="button" title="Cancel reply">✕</button>
+                </div>
                 <textarea id="messageInput" placeholder="Сообщение..."></textarea>
                 <div class="composer-actions">
                     <button id="btnAssets" title="Эмодзи и стикеры">😀</button>
@@ -375,6 +382,6 @@
     </dialog>
 
     <!-- Обновленный параметр кэша ?v=... для CSS и JS -->
-    <script src="/static/app.js?v=50260325a"></script>
+    <script src="/static/app.js?v=70260325c"></script>
 </body>
 </html>
