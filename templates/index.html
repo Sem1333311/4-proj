@@ -8,7 +8,7 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <title>LAN Messenger</title>
     <!-- Обновленный параметр кэша ?v=... для CSS и JS -->
-    <link rel="stylesheet" href="/static/style.css?v=20260324a">
+    <link rel="stylesheet" href="/static/style.css?v=20260325a">
     <meta http-equiv="Permissions-Policy" content="camera=(self), microphone=(self), display-capture=(self)">
 </head>
 <body>
@@ -52,12 +52,12 @@
                     <span class="quick-glyph">💬</span>
                     <span class="quick-label">Чаты</span>
                 </button>
-                <button id="tabRequests" class="quick" aria-label="Запросы">
-                    <span class="quick-glyph">📥</span>
-                    <span class="quick-label">Запросы</span>
+                <button id="tabRequests" class="quick" aria-label="Заявки">
+                    <span class="quick-glyph">🔔</span>
+                    <span class="quick-label">Заявки</span>
                 </button>
                 <button id="tabSearch" class="quick" aria-label="Поиск">
-                    <span class="quick-glyph">🔎</span>
+                    <span class="quick-glyph">🔍</span>
                     <span class="quick-label">Поиск</span>
                 </button>
                 <button id="tabFriends" class="quick" aria-label="Друзья">
@@ -76,7 +76,7 @@
                 <div class="profile-mini" id="profileMini"></div>
 
                 <div class="sidebar-actions">
-                    
+
                 </div>
             </div>
 
@@ -93,7 +93,7 @@
                 </div>
 
                 <div class="search-wrap">
-                    <input type="text" id="chatSearch" placeholder="Поиск...">
+                    <input type="text" id="chatSearch" placeholder="Поиск чатов...">
                 </div>
 
                 <div id="chatList" class="list chat-list"></div>
@@ -150,46 +150,55 @@
                     <div>
                         <p class="eyebrow">Профиль</p>
                         <h3>Настройки</h3>
-                        <button id="btnCopyMyId" class="ghost" title="Скопировать ID">Нажмите что бы копировать🆔</button>
-                        <button id="btnProfile" title="Профиль">Нажмите что бы изменить Аватар👤</button>
+                        <button id="btnCopyMyId" class="ghost" title="Скопировать свой ID">Скопировать ID</button>
+                        <button id="btnProfile" title="Редактировать профиль">Профиль</button>
                     </div>
                 </div>
-                
+
                 <div class="settings-content">
                     <h3>Настройки профиля</h3>
-                    <label>Имя пользователя:</label>
-                    <input type="text" id="profileName" placeholder="Ваше имя" class="glass-input">
-                    
+                    <label>Никнейм:</label>
+                    <input type="text" id="profileName" placeholder="Ваш ник" class="glass-input">
+
                     <label>Приватность:</label>
                     <select id="privacySettings" class="glass-input">
-                        <option value="all">Все</option>
+                        <option value="everyone">Все</option>
                         <option value="friends">Только друзья</option>
                         <option value="nobody">Никто</option>
+                    </select>
+
+                    <h4>Тема</h4>
+                    <label>Тема:</label>
+                    <select id="themeSelect" class="glass-input">
+                        <option value="default">По умолчанию</option>
+                        <option value="light">Светлая</option>
+                        <option value="burgundy">Бордовая</option>
+                        <option value="black">Чёрная</option>
                     </select>
 
                     <h4>Режим "Не беспокоить"</h4>
                     <div class="toggle-row">
                         <input type="checkbox" id="dndEnabled">
-                        <label for="dndEnabled" style="margin: 0; cursor: pointer;">Включить режим "Не беспокоить"</label>
+                        <label for="dndEnabled" style="margin: 0; cursor: pointer;">Включить режим "Не беспокоить" по расписанию</label>
                     </div>
                     <div id="dndTimeSettings" style="display: none; margin-top: 12px;">
-                        <label>Время начала:</label>
+                        <label>С:</label>
                         <input type="time" id="dndStartTime" class="glass-input" value="22:00">
-                        <label style="margin-top: 8px;">Время окончания:</label>
+                        <label style="margin-top: 8px;">До:</label>
                         <input type="time" id="dndEndTime" class="glass-input" value="08:00">
                     </div>
-                    
+
                     <h4>Смена пароля</h4>
                     <input type="password" id="oldPassword" placeholder="Старый пароль" class="glass-input">
                     <input type="password" id="newPassword" placeholder="Новый пароль" class="glass-input">
-                    <button id="btnChangePassword" class="ghost action-btn">🔐 Сменить пароль</button>
-                    
+                    <button id="btnChangePassword" class="ghost action-btn">Сменить пароль</button>
+
                     <h4>Заблокированные</h4>
                     <div id="blockedList" class="list compact"></div>
-                    
+
                     <div class="settings-actions">
-                        <button id="settingsSave" class="primary-btn">💾 Сохранить</button>
-                        <button id="btnDeleteAccount" class="danger-btn">🗑️ Удалить профиль</button>
+                        <button id="settingsSave" class="primary-btn">Сохранить изменения</button>
+                        <button id="btnDeleteAccount" class="danger-btn">Удалить аккаунт</button>
                     </div>
                 </div>
             </div>
@@ -210,18 +219,18 @@
 
                 <div class="chat-controls">
                     <button id="btnMobileMenu" class="mobile-only ghost" title="Разделы">📚</button>
-                    <button id="btnShowMembers" class="hidden" title="Участники">👥</button>
-                    <button id="btnGroupAvatar" class="hidden" title="Сменить аватарку">🖼️</button>
+                    <button id="btnShowMembers" class="hidden" title="Участники" aria-pressed="false">👥</button>
+                    <button id="btnGroupAvatar" class="hidden" title="Сменить аватар группы">🖼️</button>
                     <button id="btnCallStart" title="Звонок">📞</button>
-                    <button id="btnInviteGroup" class="hidden" title="Пригласить">➕</button>
-                    <button id="btnLeaveChat" class="danger hidden" title="Выйти">🚪</button>
-                    <button id="btnDeleteGroup" class="danger hidden" title="Удалить">🗑️</button>
+                    <button id="btnInviteGroup" class="hidden" title="Пригласить в группу">➕</button>
+                    <button id="btnLeaveChat" class="danger hidden" title="Выйти из чата">🚪</button>
+                    <button id="btnDeleteGroup" class="danger hidden" title="Удалить группу">🗑️</button>
                 </div>
             </div>
 
             <div class="chat-stack">
                 <div id="membersBackdrop" class="members-backdrop hidden"></div>
-                <div id="groupMembersPanel" class="group-members hidden">
+                <aside id="groupMembersPanel" class="group-members hidden" aria-label="Участники группы">
                     <div class="group-members-head">
                         <div class="group-members-title">
                             <p class="eyebrow">Состав</p>
@@ -230,7 +239,7 @@
                         <button id="btnCloseMembers" class="ghost members-close-btn" title="Закрыть">✕</button>
                     </div>
                     <div id="chatMembers" class="member-list"></div>
-                </div>
+                </aside>
 
                 <div class="chat-main">
                     <div id="chatEmptyState" class="chat-empty">
@@ -311,6 +320,24 @@
         </div>
     </dialog>
 
+    <dialog id="userViewDialog">
+        <div class="user-view-head">
+            <div id="userViewAvatar"></div>
+            <div class="user-view-copy">
+                <h3 id="userViewNickname">Профиль</h3>
+                <p id="userViewUsername" class="user-view-username">@username</p>
+                <p id="userViewId" class="user-view-id">#0</p>
+            </div>
+        </div>
+        <div id="userViewAbout" class="user-view-about">Информация о пользователе пока не заполнена.</div>
+        <p id="userViewStatus" class="small user-view-status"></p>
+        <div class="dialog-actions">
+            <button id="userViewMessageBtn">Чат</button>
+            <button id="userViewFriendBtn" class="ghost">Добавить</button>
+            <button id="userViewClose" class="ghost">Закрыть</button>
+        </div>
+    </dialog>
+
     <dialog id="groupDialog">
         <h3>Новая группа</h3>
         <input type="text" id="groupTitle" placeholder="Название">
@@ -322,21 +349,32 @@
     </dialog>
 
     <dialog id="assetsDialog">
-        <h3>Стикеры</h3>
+        <h3>Эмодзи и стикеры</h3>
+
+        <div class="emoji-browser">
+            <div id="emojiCategoryTabs" class="emoji-category-tabs"></div>
+            <div id="emojiRecentSection" class="emoji-recent-section hidden">
+                <p class="small">Недавние</p>
+                <div id="emojiRecentGrid" class="emoji-grid emoji-grid-recent"></div>
+            </div>
+            <div id="emojiGrid" class="emoji-grid"></div>
+        </div>
+
+        <h4>Свои стикеры</h4>
         <select id="assetKind">
-            <option value="emoji">Emoji</option>
-            <option value="sticker">Sticker</option>
+            <option value="emoji">Emoji-файл</option>
+            <option value="sticker">Стикер</option>
         </select>
         <input type="text" id="assetTitle" placeholder="Название">
         <input type="file" id="assetFile" accept="image/*,video/*">
-        <button id="btnUploadAsset" class="ghost dialog-inline">⬆️</button>
+        <button id="btnUploadAsset" class="ghost dialog-inline">Загрузить</button>
         <div id="assetsList" class="list"></div>
         <div class="dialog-actions">
-            <button id="assetsClose" class="ghost">✖</button>
+            <button id="assetsClose" class="ghost">Закрыть</button>
         </div>
     </dialog>
 
     <!-- Обновленный параметр кэша ?v=... для CSS и JS -->
-    <script src="/static/app.js?v=20260324b"></script>
+    <script src="/static/app.js?v=50260325a"></script>
 </body>
 </html>
