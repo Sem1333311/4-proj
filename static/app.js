@@ -41,6 +41,7 @@ const state = {
     },
     assets: [],
     messagesById: new Map(),
+    pendingMessagesByClientId: new Map(),
     ui: {
         currentTab: "chats",
         chatOpen: false,
@@ -194,6 +195,7 @@ function applyTheme(theme, saveLocal = true) {
 
 function applySettingsToUi() {
     const s = state.settings || {};
+    syncProfileInputs();
 
     const privacySettings = qs("privacySettings");
     if (privacySettings) {
@@ -407,7 +409,71 @@ function peerNameById(id) {
 
 function withMediaToken(url) {
     if (!url || !state.token) return url;
+    if (String(url).startsWith("blob:") || String(url).startsWith("data:"))
+        return url;
     return `${url}${url.includes("?") ? "&" : "?"}token=${encodeURIComponent(state.token)}`;
+}
+
+function makeClientMessageId() {
+    return `cm_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function clearPendingMessage(clientId) {
+    if (!clientId) return;
+    const pending = state.pendingMessagesByClientId.get(clientId);
+    if (!pending) return;
+    if (pending.tempId) removeMessageById(pending.tempId);
+    if (pending.objectUrl && pending.objectUrl.startsWith("blob:")) {
+        try {
+            URL.revokeObjectURL(pending.objectUrl);
+        } catch (_) {}
+    }
+    state.pendingMessagesByClientId.delete(clientId);
+}
+
+function buildOptimisticMessage({ text = "", file = null, kind = "text", asset = null, clientId = "", replyToId = 0 }) {
+    const reply = replyToId > 0 ? state.messagesById.get(replyToId) || null : null;
+    const objectUrl = file ? URL.createObjectURL(file) : "";
+    const optimisticKind = asset?.kind || kind || "text";
+    return {
+        id: -Date.now(),
+        client_id: clientId,
+        chat_id: state.currentChatId,
+        user_id: state.me?.id,
+        username: state.me?.username || "",
+        nickname: state.me?.nickname || "",
+        avatar: state.me?.avatar || "",
+        kind: optimisticKind,
+        text: text || "",
+        file_url: objectUrl || asset?.file_url || "",
+        file_name: file?.name || asset?.file_name || "",
+        mime_type: file?.type || asset?.mime_type || "",
+        created_at: new Date().toISOString(),
+        read_count: 0,
+        reply_to_message_id: replyToId > 0 ? replyToId : null,
+        reply_preview: reply,
+        pending: true,
+    };
+}
+
+function registerPendingMessage(clientId, tempId, objectUrl = "") {
+    if (!clientId) return;
+    state.pendingMessagesByClientId.set(clientId, {
+        tempId,
+        objectUrl,
+    });
+}
+
+function syncProfileInputs() {
+    const nickname = state.me?.nickname || "";
+    const profileName = qs("profileName");
+    if (profileName && document.activeElement !== profileName) {
+        profileName.value = nickname;
+    }
+    const profileNickname = qs("profileNickname");
+    if (profileNickname && document.activeElement !== profileNickname) {
+        profileNickname.value = nickname;
+    }
 }
 
 function avatarMediaUrl(avatar) {
@@ -839,6 +905,11 @@ function messageBodyV2(m) {
 }
 
 function appendMessage(m) {
+    if (m?.client_id && !m.pending) {
+        clearPendingMessage(m.client_id);
+    }
+    const mid = Number(m?.id);
+    if (Number.isFinite(mid) && state.messagesById.has(mid)) return;
     state.messagesById.set(Number(m.id), m);
     const mine = m.user_id === state.me?.id;
     const isRead = mine && m.read_count > 0;
@@ -846,13 +917,14 @@ function appendMessage(m) {
     item.dataset.mid = String(m.id);
     item.dataset.uid = String(m.user_id);
     item.dataset.mine = mine ? "1" : "0";
+    if (m.client_id) item.dataset.clientId = String(m.client_id);
     if (m.file_url) {
         item.dataset.fileUrl = withMediaToken(m.file_url);
         item.dataset.fileName = m.file_name || mediaFallbackName(m.kind);
     }
-    item.className = `message ${mine ? "mine" : ""}`;
+    item.className = `message ${mine ? "mine" : ""}${m.pending ? " pending" : ""}`;
     const statusHtml = mine
-        ? `<span class="msg-status ${isRead ? "read" : ""}" data-mid="${m.id}">${isRead ? "✓✓" : "✓"}</span>`
+        ? `<span class="msg-status ${m.pending ? "pending" : isRead ? "read" : ""}" data-mid="${m.id}">${m.pending ? "…" : isRead ? "✓✓" : "✓"}</span>`
         : "";
     item.innerHTML = `
         ${mine ? "" : avatarMarkup({ avatar: m.avatar, label: m.nickname, seed: `user-${m.user_id}`, className: "avatar-sm" })}
@@ -1542,34 +1614,91 @@ async function refreshSide() {
 
 async function sendMessage({ text = "", file = null, kind = "text" }) {
     if (!state.currentChatId) return;
-    const form = new FormData();
-    form.append("text", text);
-    form.append("kind", kind);
+    const clientId = makeClientMessageId();
     const replyToId = Number(state.ui.replyTo?.id || 0);
-    if (replyToId > 0) form.append("reply_to", String(replyToId));
-    if (file) form.append("file", file, file.name || "upload.bin");
-    await api(`/api/chats/${state.currentChatId}/messages`, {
-        method: "POST",
-        body: form,
-        headers: {},
-    });
     const input = qs("messageInput");
+    const draftText = input?.value ?? text;
+    const bodyText = text || draftText || "";
+    const optimistic = buildOptimisticMessage({
+        text: bodyText,
+        file,
+        kind,
+        clientId,
+        replyToId,
+    });
+    registerPendingMessage(clientId, optimistic.id, optimistic.file_url || "");
+    appendMessage(optimistic);
     if (input) input.value = "";
-    clearReplyTarget();
+    const form = new FormData();
+    form.append("text", bodyText);
+    form.append("kind", kind);
+    if (replyToId > 0) form.append("reply_to", String(replyToId));
+    form.append("client_id", clientId);
+    if (file) form.append("file", file, file.name || "upload.bin");
+    try {
+        const data = await api(`/api/chats/${state.currentChatId}/messages`, {
+            method: "POST",
+            body: form,
+            headers: {},
+        });
+        if (Number(data.chat_id) === Number(state.currentChatId)) {
+            appendMessage(data);
+        } else {
+            clearPendingMessage(clientId);
+        }
+        clearReplyTarget();
+        return data;
+    } catch (e) {
+        removeMessageById(optimistic.id);
+        clearPendingMessage(clientId);
+        if (input) input.value = draftText;
+        if (replyToId > 0 && state.messagesById.has(replyToId)) {
+            state.ui.replyTo = state.messagesById.get(replyToId);
+            renderReplyComposer();
+        }
+        throw e;
+    }
 }
 
 async function sendAssetMessage(assetId) {
     if (!state.currentChatId) return;
+    const clientId = makeClientMessageId();
+    const replyToId = Number(state.ui.replyTo?.id || 0);
+    const asset = state.assets.find((a) => Number(a.id) === Number(assetId)) || null;
+    const optimistic = buildOptimisticMessage({
+        kind: asset?.kind || "emoji",
+        asset,
+        clientId,
+        replyToId,
+    });
+    registerPendingMessage(clientId, optimistic.id, optimistic.file_url || "");
+    appendMessage(optimistic);
     const form = new FormData();
     form.append("asset_id", String(assetId));
-    const replyToId = Number(state.ui.replyTo?.id || 0);
     if (replyToId > 0) form.append("reply_to", String(replyToId));
-    await api(`/api/chats/${state.currentChatId}/messages/asset`, {
-        method: "POST",
-        body: form,
-        headers: {},
-    });
-    clearReplyTarget();
+    form.append("client_id", clientId);
+    try {
+        const data = await api(`/api/chats/${state.currentChatId}/messages/asset`, {
+            method: "POST",
+            body: form,
+            headers: {},
+        });
+        if (Number(data.chat_id) === Number(state.currentChatId)) {
+            appendMessage(data);
+        } else {
+            clearPendingMessage(clientId);
+        }
+        clearReplyTarget();
+        return data;
+    } catch (e) {
+        removeMessageById(optimistic.id);
+        clearPendingMessage(clientId);
+        if (replyToId > 0 && state.messagesById.has(replyToId)) {
+            state.ui.replyTo = state.messagesById.get(replyToId);
+            renderReplyComposer();
+        }
+        throw e;
+    }
 }
 
 async function loadAssets() {
@@ -3110,6 +3239,9 @@ function connectWs() {
         }
 
         if (msg.type === "message:new") {
+            if (msg.payload.client_id) {
+                clearPendingMessage(msg.payload.client_id);
+            }
             if (msg.payload.chat_id === state.currentChatId) {
                 appendMessage(msg.payload);
                 if (msg.payload.user_id !== state.me?.id)
@@ -3258,6 +3390,15 @@ function resetToAuthUi() {
     state.friends = [];
     state.currentChat = null;
     state.currentChatId = null;
+    state.messagesById.clear();
+    state.pendingMessagesByClientId.forEach((pending) => {
+        if (pending?.objectUrl && pending.objectUrl.startsWith("blob:")) {
+            try {
+                URL.revokeObjectURL(pending.objectUrl);
+            } catch (_) {}
+        }
+    });
+    state.pendingMessagesByClientId.clear();
 }
 
 // ─── Привязка UI ─────────────────────────────────────────────────────────────
@@ -3523,6 +3664,7 @@ function bindUi() {
                     about: qs("profileAbout")?.value || "",
                 }),
             });
+            syncProfileInputs();
             const avatar = qs("profileAvatar")?.files[0];
             if (avatar) {
                 const form = new FormData();
@@ -3735,6 +3877,18 @@ function bindUi() {
     if (settingsSave)
     settingsSave.onclick = async () => {
         try {
+            const nickname = qs("profileName")?.value?.trim() || state.me?.nickname || "";
+            if (nickname) {
+                state.me = await api("/api/profile", {
+                    method: "POST",
+                    body: JSON.stringify({
+                        nickname,
+                        about: state.me?.about || "",
+                    }),
+                });
+                syncProfileInputs();
+                renderProfileMini();
+            }
             state.settings = await api("/api/settings", {
                 method: "POST",
                 body: JSON.stringify({
