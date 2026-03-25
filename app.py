@@ -1481,6 +1481,7 @@ async def send_message(
     text: str = Form(""),
     kind: str = Form("text"),
     reply_to: Optional[int] = Form(None),
+    client_id: str = Form(""),
     file: Optional[UploadFile] = File(None),
     user=Depends(get_current_user),
 ):
@@ -1532,6 +1533,8 @@ async def send_message(
         msg_id = cursor.lastrowid
     row = conn.execute("SELECT m.*, u.username, u.nickname, u.avatar FROM messages m JOIN users u ON u.id = m.user_id WHERE m.id = ?", (msg_id,)).fetchone()
     data = serialize_message(row, conn=conn)
+    if client_id:
+        data["client_id"] = client_id
     conn.close()
     await broadcast_to_chat(chat_id, {"type": "message:new", "payload": data})
     return data
@@ -1542,6 +1545,7 @@ async def send_asset_message(
     asset_id: int = Form(...),
     text: str = Form(""),
     reply_to: Optional[int] = Form(None),
+    client_id: str = Form(""),
     user=Depends(get_current_user),
 ):
     conn = get_db()
@@ -1577,6 +1581,8 @@ async def send_asset_message(
         msg_id = cur.lastrowid
     row = conn.execute("SELECT m.*, u.username, u.nickname, u.avatar FROM messages m JOIN users u ON u.id = m.user_id WHERE m.id = ?", (msg_id,)).fetchone()
     data = serialize_message(row, conn=conn)
+    if client_id:
+        data["client_id"] = client_id
     conn.close()
     await broadcast_to_chat(chat_id, {"type": "message:new", "payload": data})
     return data
